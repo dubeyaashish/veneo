@@ -1,68 +1,52 @@
 // src/App.js
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
+import 'bootstrap/dist/css/bootstrap.min.css';
+import 'bootstrap-icons/font/bootstrap-icons.css';
+import LoginPage from './components/LoginPage';
+import RegistrationPage from './components/RegisterPage';
+import Dashboard from './components/Dashboard';
+import SearchPage from './components/SearchPage';
+import EditOrder from './components/EditOrder';
+import Navbar from './components/Navbar';
+import { AuthProvider, PrivateRoute } from './context/AuthContext';
+import './App.css';
 
-// Layout components
-import MainLayout from './layouts/MainLayout';
-import AuthLayout from './layouts/AuthLayout';
-
-// Page components
-import Dashboard from './pages/Dashboard';
-import OrderList from './pages/OrderList';
-import OrderDetails from './pages/OrderDetails';
-import OrderEdit from './pages/OrderEdit';
-import Login from './pages/Login';
-import Register from './pages/Register';
-import VerifyOTP from './pages/VerifyOTP';
-import NotFound from './pages/NotFound';
-import Profile from './pages/Profile';
-
-// Protected route component
-const ProtectedRoute = ({ children }) => {
-  const { isAuthenticated, loading } = useAuth();
-  
-  if (loading) {
-    return <div className="flex items-center justify-center min-h-screen">
-      <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
-    </div>;
-  }
-  
-  return isAuthenticated ? children : <Navigate to="/login" />;
-};
-
-const App = () => {
+function App() {
   return (
     <AuthProvider>
       <Router>
-        <Routes>
-          {/* Auth routes */}
-          <Route path="/" element={<AuthLayout />}>
-            <Route path="login" element={<Login />} />
-            <Route path="register" element={<Register />} />
-            <Route path="verify-otp" element={<VerifyOTP />} />
-          </Route>
-          
-          {/* App routes */}
-          <Route path="/" element={
-            <ProtectedRoute>
-              <MainLayout />
-            </ProtectedRoute>
-          }>
-            <Route index element={<Navigate to="/dashboard" />} />
-            <Route path="dashboard" element={<Dashboard />} />
-            <Route path="orders" element={<OrderList />} />
-            <Route path="orders/:id" element={<OrderDetails />} />
-            <Route path="orders/:id/edit" element={<OrderEdit />} />
-            <Route path="profile" element={<Profile />} />
-          </Route>
-          
-          {/* 404 route */}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+        <div className="app-container">
+          <Navbar />
+          <div className="content-container">
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/register" element={<RegistrationPage />} />
+              <Route path="/" element={
+                <PrivateRoute>
+                  <Dashboard />
+                </PrivateRoute>
+              } />
+              <Route path="/search" element={
+                <PrivateRoute>
+                  <SearchPage />
+                </PrivateRoute>
+              } />
+              <Route path="/order/:id" element={
+                <PrivateRoute>
+                  <EditOrder />
+                </PrivateRoute>
+              } />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </div>
+          <ToastContainer position="top-right" autoClose={3000} />
+        </div>
       </Router>
     </AuthProvider>
   );
-};
+}
 
 export default App;
