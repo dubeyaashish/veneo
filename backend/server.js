@@ -3,9 +3,10 @@ const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2/promise');
 const axios = require('axios');
-const crypto = require('crypto');
 const bodyParser = require('body-parser');
 const config = require('./config');
+const nodemailer = require('nodemailer');
+const crypto = require('crypto');
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -20,6 +21,126 @@ const getDbConnection = async () => {
   return mysql.createConnection(config.db);
 };
 
+const transporter = nodemailer.createTransport({
+  host: 'smtp.office365.com',  // Outlook SMTP server
+  port: 587,
+  secure: false,  // true for 465, false for other ports
+  auth: {
+    user: 'misteam@peerapat.com',
+    pass: 'Poppy*1234'
+  },
+  tls: {
+    ciphers: 'SSLv3'
+  }
+});
+
+async function sendOTPEmail(email, otp) {
+  try {
+    const mailOptions = {
+      from: '"VERP System" <misteam@peerapat.com>',
+      to: email,
+      subject: 'Your OTP for VERP Registration',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 5px;">
+          <h2 style="color: #4361ee; text-align: center;">VERP Registration</h2>
+          <p style="margin-bottom: 20px;">Thank you for registering with VERP. To complete your registration, please use the following One-Time Password (OTP):</p>
+          <div style="background-color: #f8f9fa; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 2px; border-radius: 5px; margin-bottom: 20px;">
+            ${otp}
+          </div>
+          <p>This OTP will expire in 10 minutes.</p>
+          <p>If you did not request this registration, please ignore this email.</p>
+          <p style="margin-top: 30px; font-size: 12px; color: #777; text-align: center;">
+            This is an automated email. Please do not reply to this message.
+          </p>
+        </div>
+      `
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log('Email sent: %s', info.messageId);
+    return true;
+  } catch (error) {
+    console.error('Error sending email:', error);
+    return false;
+  }
+}
+
+module.exports = {
+  sendOTPEmail
+};
+
+const otpStore = {};
+
+// Function to generate a 6-digit OTP
+function generateOTP() {
+  // Generate a random 6-digit number
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+// Function to store an OTP with expiration time (10 minutes)
+function storeOTP(telegramId, email, otp) {
+  const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes from now
+  
+  otpStore[telegramId] = {
+    otp,
+    email,
+    expiresAt
+  };
+  
+  // Set up automatic cleanup after expiration
+  setTimeout(() => {
+    if (otpStore[telegramId] && otpStore[telegramId].otp === otp) {
+      delete otpStore[telegramId];
+    }
+  }, 10 * 60 * 1000);
+  
+  return otp;
+}
+
+// Function to verify an OTP
+function verifyOTP(telegramId, enteredOTP) {
+  const record = otpStore[telegramId];
+  
+  if (!record) {
+    return { valid: false, message: 'OTP not found. Please request a new one.' };
+  }
+  
+  if (Date.now() > record.expiresAt) {
+    delete otpStore[telegramId];
+    return { valid: false, message: 'OTP expired. Please request a new one.' };
+  }
+  
+  if (record.otp !== enteredOTP) {
+    return { valid: false, message: 'Invalid OTP. Please try again.' };
+  }
+  
+  // OTP is valid, delete it so it can't be reused
+  const email = record.email;
+  delete otpStore[telegramId];
+  
+  return { valid: true, email };
+}
+
+// Function to check if a Telegram ID has an active OTP
+function hasActiveOTP(telegramId) {
+  return !!otpStore[telegramId] && otpStore[telegramId].expiresAt > Date.now();
+}
+
+// Function to get the email associated with an active OTP
+function getEmailForOTP(telegramId) {
+  if (hasActiveOTP(telegramId)) {
+    return otpStore[telegramId].email;
+  }
+  return null;
+}
+
+module.exports = {
+  generateOTP,
+  storeOTP,
+  verifyOTP,
+  hasActiveOTP,
+  getEmailForOTP
+};
 // Authentication endpoint
 app.post('/api/auth/telegram', async (req, res) => {
   try {
@@ -902,6 +1023,227 @@ app.get('/api/orders/search', async (req, res) => {
   res.json({ results: rows });
 });
 
+
+// Then add these routes
+
+// Send OTP endpoint
+app.post('/api/auth/send-otp', async (req, res) => {
+  try {
+    const { telegram_id, email, employee_id, department } = req.body;
+    
+    if (!telegram_id || !email || !employee_id || !department) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing required information' 
+      });
+    }
+    
+    // Validate email format
+    const emailRegex = /\S+@\S+\.\S+/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid email format' 
+      });
+    }
+    
+    // Check if user exists
+    const conn = await getDbConnection();
+    const [userRows] = await conn.execute(
+      'SELECT * FROM users WHERE telegram_id = ?',
+      [telegram_id]
+    );
+    
+    if (userRows.length === 0) {
+      await conn.end();
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+    }
+    
+    // Generate OTP
+    const otp = otpService.generateOTP();
+    
+    // Store OTP
+    otpService.storeOTP(telegram_id, email, otp);
+    
+    // Send OTP via email
+    const emailSent = await emailService.sendOTPEmail(email, otp);
+    
+    await conn.end();
+    
+    if (emailSent) {
+      res.json({
+        success: true,
+        message: 'OTP sent successfully',
+        email: email.replace(/(.{2})(.*)(@.*)/, '$1****$3') // Mask email for privacy
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to send OTP email'
+      });
+    }
+  } catch (error) {
+    console.error('Error sending OTP:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+});
+
+// Verify OTP endpoint
+app.post('/api/auth/verify-otp', async (req, res) => {
+  try {
+    const { telegram_id, otp, email, employee_id, department } = req.body;
+    
+    if (!telegram_id || !otp || !email || !employee_id || !department) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing required information' 
+      });
+    }
+    
+    // Verify OTP
+    const verification = otpService.verifyOTP(telegram_id, otp);
+    
+    if (!verification.valid) {
+      return res.status(400).json({ 
+        success: false, 
+        message: verification.message 
+      });
+    }
+    
+    // Verify email matches
+    if (verification.email !== email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email mismatch. Please request a new OTP.'
+      });
+    }
+    
+    // OTP is valid, proceed with registration
+    const conn = await getDbConnection();
+    
+    // Update user with email, employee ID, department, and mark registration as complete
+    await conn.execute(
+      'UPDATE users SET email = ?, employee_id = ?, department = ?, registration_complete = TRUE WHERE telegram_id = ?',
+      [email, employee_id, department, telegram_id]
+    );
+    
+    // Check if we can map this employee ID to a staff code
+    try {
+      // Create or update the staff_telegram_mapping table
+      const [mappingRows] = await conn.execute(
+        'SELECT * FROM staff_telegram_mapping WHERE telegram_id = ?',
+        [telegram_id]
+      );
+      
+      if (mappingRows.length === 0) {
+        // Create a new mapping
+        await conn.execute(
+          'INSERT INTO staff_telegram_mapping (telegram_id, staff_code) VALUES (?, ?)',
+          [telegram_id, employee_id]
+        );
+      } else {
+        // Update existing mapping
+        await conn.execute(
+          'UPDATE staff_telegram_mapping SET staff_code = ? WHERE telegram_id = ?',
+          [employee_id, telegram_id]
+        );
+      }
+    } catch (error) {
+      console.error('Error creating staff mapping:', error);
+      // Continue even if mapping fails - we have the essential registration data
+    }
+    
+    // Get the updated user data
+    const [updatedRows] = await conn.execute(
+      'SELECT u.*, stm.staff_code FROM users u LEFT JOIN staff_telegram_mapping stm ON u.telegram_id = stm.telegram_id WHERE u.telegram_id = ?',
+      [telegram_id]
+    );
+    
+    await conn.end();
+    
+    if (updatedRows.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found after update' 
+      });
+    }
+    
+    const user = updatedRows[0];
+    
+    const userResponse = {
+      id: user.id,
+      telegram_id: user.telegram_id,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      username: user.username,
+      photo_url: user.photo_url,
+      email: user.email,
+      employee_id: user.employee_id,
+      department: user.department,
+      staff_code: user.staff_code,
+      registration_complete: user.registration_complete === 1
+    };
+    
+    res.json({
+      success: true,
+      user: userResponse
+    });
+  } catch (error) {
+    console.error('Error verifying OTP:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+});
+
+// Resend OTP endpoint
+app.post('/api/auth/resend-otp', async (req, res) => {
+  try {
+    const { telegram_id, email } = req.body;
+    
+    if (!telegram_id || !email) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing telegram_id or email' 
+      });
+    }
+    
+    // Generate new OTP
+    const otp = otpService.generateOTP();
+    
+    // Store OTP
+    otpService.storeOTP(telegram_id, email, otp);
+    
+    // Send OTP via email
+    const emailSent = await emailService.sendOTPEmail(email, otp);
+    
+    if (emailSent) {
+      res.json({
+        success: true,
+        message: 'OTP resent successfully',
+        email: email.replace(/(.{2})(.*)(@.*)/, '$1****$3') // Mask email for privacy
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to resend OTP email'
+      });
+    }
+  } catch (error) {
+    console.error('Error resending OTP:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+});
 
 
 // Start server

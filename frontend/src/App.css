@@ -381,3 +381,97 @@ body {
   justify-content: center;
   z-index: 2000;
 }
+/* Add these styles to your App.css file */
+
+/* OTP Input Styles */
+.otp-input-container {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+
+.otp-input {
+  width: 48px;
+  height: 54px;
+  font-size: 1.25rem;
+  text-align: center;
+  margin-right: 8px;
+  border-radius: 8px;
+  border: 1px solid #ced4da;
+  background-color: white;
+  transition: all 0.3s ease;
+}
+
+.otp-input:last-child {
+  margin-right: 0;
+}
+
+.otp-input:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 0.25rem rgba(67, 97, 238, 0.25);
+  outline: none;
+}
+
+.otp-verification .card-title {
+  font-weight: 600;
+  color: var(--primary-color);
+  margin-bottom: 1.5rem;
+}
+
+.otp-verification .form-label {
+  font-weight: 500;
+  display: block;
+  margin-bottom: 1rem;
+}
+
+.otp-verification .timer {
+  font-size: 0.9rem;
+  color: #6c757d;
+  margin-bottom: 0;
+}
+
+.otp-verification .resend-button {
+  color: var(--primary-color);
+  font-weight: 500;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.otp-verification .resend-button:hover {
+  color: var(--secondary-color);
+  text-decoration: underline;
+}
+
+.otp-verification .resend-button:disabled {
+  color: #adb5bd;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
+.otp-verification .masked-email {
+  font-weight: 500;
+}
+
+/* Animation for successful OTP verification */
+@keyframes successPulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.otp-success-icon {
+  animation: successPulse 1s ease-in-out;
+  color: var(--success-color);
+}
