@@ -1,5 +1,5 @@
 // src/components/TelegramLogin.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
@@ -12,13 +12,17 @@ const TelegramLogin = () => {
   const [error, setError] = useState('');
   const { login } = useAuth();
   const navigate = useNavigate();
+  const containerRef = useRef(null);
 
   useEffect(() => {
-    // Set up Telegram login callback
+    // Define the Telegram callback in the global scope
     window.onTelegramAuth = (user) => {
       handleTelegramResponse(user);
     };
 
+    // Create and append the Telegram script
+    if (!containerRef.current) return;
+    
     try {
       const script = document.createElement('script');
       script.src = 'https://telegram.org/js/telegram-widget.js?22';
@@ -27,64 +31,67 @@ const TelegramLogin = () => {
       script.setAttribute('data-radius', '8');
       script.setAttribute('data-request-access', 'write');
       script.setAttribute('data-onauth', 'onTelegramAuth(user)');
-      
-      // If we're using ngrok, we need to set the auth URL to match
-      if (process.env.REACT_APP_PUBLIC_URL) {
-        script.setAttribute('data-auth-url', `${process.env.REACT_APP_PUBLIC_URL}/login`);
-      }
-      
       script.async = true;
 
-      const container = document.getElementById('telegram-login-container');
-      if (container) {
-        container.appendChild(script);
-      }
+      // Clear existing content
+      containerRef.current.innerHTML = '';
+      containerRef.current.appendChild(script);
 
       return () => {
-        if (container && script && script.parentNode === container) {
-          container.removeChild(script);
+        if (containerRef.current) {
+          containerRef.current.innerHTML = '';
         }
       };
     } catch (error) {
-      setError(`Error loading widget: ${error.message}`);
+      console.error('Error loading Telegram widget:', error);
+      setError('Failed to load Telegram login widget.');
     }
   }, []);
 
   const handleTelegramResponse = async (user) => {
+    if (!user || !user.id) {
+      setError('Invalid response from Telegram');
+      return;
+    }
+
     try {
       setLoading(true);
       setError('');
       
-      console.log('Telegram user data:', user);
+      console.log('Telegram auth data:', user);
       
       const response = await axios.post(`${API_URL}/auth/telegram`, user);
       
       if (response.data.success) {
         const userData = response.data.user;
+        
+        // Pass the user data to the auth context
         const isComplete = login(userData);
         
-        // If registration is complete, go to dashboard
-        // Otherwise, go to registration page
         if (isComplete) {
+          // If registration is complete, go to dashboard
           navigate('/');
         } else {
+          // If registration is incomplete, go to registration
           navigate('/register');
         }
       } else {
-        setError(response.data.message || 'Login failed. Please try again.');
+        setError(response.data.message || 'Login failed');
       }
     } catch (error) {
-      console.error('Error during Telegram login:', error);
-      setError('Login failed. Please try again.');
+      console.error('Error authenticating with Telegram:', error);
+      setError(error.response?.data?.message || 'Login failed. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  // For development testing only
-  const handleTestLogin = () => {
-    const mockTelegramUser = {
-      id: 12345678,
+  // Development-only test login
+  const handleTestLogin = async () => {
+    if (process.env.NODE_ENV !== 'development') return;
+    
+    const mockUser = {
+      id: 123456789,
       first_name: "Test",
       last_name: "User",
       username: "testuser",
@@ -92,24 +99,28 @@ const TelegramLogin = () => {
       auth_date: Math.floor(Date.now() / 1000)
     };
     
-    handleTelegramResponse(mockTelegramUser);
+    handleTelegramResponse(mockUser);
   };
 
   return (
     <div className="text-center my-4">
       {error && (
-        <div className="alert alert-danger mb-4">{error}</div>
+        <div className="alert alert-danger mb-4">
+          <i className="bi bi-exclamation-triangle-fill me-2"></i>
+          {error}
+        </div>
       )}
       
-      <div id="telegram-login-container"></div>
+      <div ref={containerRef} id="telegram-login-container"></div>
       
       {process.env.NODE_ENV === 'development' && (
         <div className="mt-3">
           <button 
             className="btn btn-outline-primary"
             onClick={handleTestLogin}
+            disabled={loading}
           >
-            <i className="bi bi-bug"></i> Test Telegram Login
+            <i className="bi bi-bug me-2"></i> Test Login (Dev Only)
           </button>
         </div>
       )}
@@ -119,7 +130,7 @@ const TelegramLogin = () => {
           <div className="spinner-border text-primary" role="status">
             <span className="visually-hidden">Loading...</span>
           </div>
-          <p className="mt-2">กำลังเข้าสู่ระบบ...</p>
+          <p className="mt-2">Processing login...</p>
         </div>
       )}
     </div>

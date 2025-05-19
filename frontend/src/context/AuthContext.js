@@ -1,6 +1,6 @@
 // src/context/AuthContext.js
 import React, { useState, useEffect, createContext, useContext } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 
 // Create Auth Context
 const AuthContext = createContext(null);
@@ -8,64 +8,71 @@ const AuthContext = createContext(null);
 // Auth Provider Component
 export const AuthProvider = ({ children }) => {
   const [currentUser, setCurrentUser] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [pendingRegistration, setPendingRegistration] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     // Check if user is logged in
     const checkAuth = () => {
-      const storedUser = localStorage.getItem('user');
-      if (storedUser) {
-        try {
-          const userData = JSON.parse(storedUser);
-          
-          // Check if we have a pending registration
-          if (userData && !userData.registration_complete) {
-            setPendingRegistration(userData);
-            setCurrentUser(null);
-          } else {
-            setCurrentUser(userData);
-            setPendingRegistration(null);
-          }
-        } catch (error) {
-          console.error('Error parsing stored user data:', error);
-          localStorage.removeItem('user');
+      try {
+        const storedUser = localStorage.getItem('user');
+        const pendingUser = localStorage.getItem('pendingUser');
+        
+        if (pendingUser) {
+          // If there's a pending registration
+          setPendingRegistration(JSON.parse(pendingUser));
+          setCurrentUser(null);
+        } else if (storedUser) {
+          // If there's a complete user
+          setCurrentUser(JSON.parse(storedUser));
+          setPendingRegistration(null);
+        } else {
+          // No user stored
           setCurrentUser(null);
           setPendingRegistration(null);
         }
-      } else {
+      } catch (error) {
+        console.error('Error checking authentication:', error);
+        localStorage.removeItem('user');
+        localStorage.removeItem('pendingUser');
         setCurrentUser(null);
         setPendingRegistration(null);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
 
     checkAuth();
   }, []);
 
   // Login user
-  const login = (user) => {
-    if (user && !user.registration_complete) {
+  const login = (userData) => {
+    if (!userData) return false;
+    
+    if (!userData.registration_complete) {
       // Store the pending registration
-      setPendingRegistration(user);
-      localStorage.setItem('pendingUser', JSON.stringify(user));
+      localStorage.setItem('pendingUser', JSON.stringify(userData));
+      setPendingRegistration(userData);
+      setCurrentUser(null);
       return false; // Registration needed
     } else {
       // Store the complete user
-      localStorage.setItem('user', JSON.stringify(user));
-      setCurrentUser(user);
+      localStorage.setItem('user', JSON.stringify(userData));
+      setCurrentUser(userData);
       setPendingRegistration(null);
       localStorage.removeItem('pendingUser');
-      return true; // No registration needed
+      return true; // Registration complete
     }
   };
 
   // Complete registration
-  const completeRegistration = (user) => {
-    localStorage.setItem('user', JSON.stringify(user));
-    setCurrentUser(user);
-    setPendingRegistration(null);
+  const completeRegistration = (userData) => {
+    if (!userData) return;
+    
+    localStorage.setItem('user', JSON.stringify(userData));
     localStorage.removeItem('pendingUser');
+    setCurrentUser(userData);
+    setPendingRegistration(null);
   };
 
   // Logout user
@@ -93,22 +100,10 @@ export const useAuth = () => {
   return useContext(AuthContext);
 };
 
-// Protected Route Component
+// Private Route Component
 export const PrivateRoute = ({ children }) => {
   const { currentUser, loading, pendingRegistration } = useAuth();
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    if (!loading) {
-      if (pendingRegistration) {
-        // User needs to complete registration
-        navigate('/register');
-      } else if (!currentUser) {
-        // User is not logged in
-        navigate('/login');
-      }
-    }
-  }, [currentUser, pendingRegistration, loading, navigate]);
+  const location = useLocation();
 
   if (loading) {
     return (
@@ -120,8 +115,15 @@ export const PrivateRoute = ({ children }) => {
     );
   }
 
-  // Only render children if user is logged in and registration is complete
-  return currentUser ? children : null;
+  if (pendingRegistration) {
+    return <Navigate to="/register" state={{ from: location }} replace />;
+  }
+
+  if (!currentUser) {
+    return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  return children;
 };
 
 export default AuthContext;

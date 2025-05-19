@@ -1,165 +1,108 @@
-// src/components/RemarkModal.js
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Form } from 'react-bootstrap';
 
 const RemarkModal = ({ show, onHide, onSave, initialValue, conditions }) => {
   const [checkboxes, setCheckboxes] = useState({});
-  const [additionalInputs, setAdditionalInputs] = useState({});
   const [additionalRemark, setAdditionalRemark] = useState('');
 
+  // Parse initial value when opening modal
   useEffect(() => {
-    if (show && initialValue) {
-      // Parse initial value
-      const lines = initialValue.split('\n');
-      const conditionText = lines[0] || '';
-      const remarkText = lines.slice(1).join('\n');
-      
-      // Reset all states
-      setCheckboxes({});
-      setAdditionalInputs({});
-      
-      // Parse conditions
-      if (conditionText) {
-        const conditionsList = conditionText.split(', ');
-        
+    if (show) {
+      if (initialValue && initialValue.length > 0) {
+        const allParts = initialValue.split(',').map(str => str.trim()).filter(Boolean);
+        // Flatten all condition names for easy matching
+        const conditionsFlat = [];
+        Object.entries(conditions).forEach(([group, items]) => {
+          items.forEach(item => conditionsFlat.push({ ...item, group }));
+        });
+
         const newCheckboxes = {};
-        const newInputs = {};
-        
-        conditionsList.forEach(condition => {
-          let conditionName = condition;
-          let additionalText = '';
-          
-          // Check if condition has additional input
-          if (condition.includes('(') && condition.includes(')')) {
-            const match = condition.match(/^(.*?)\s*\((.*?)\)$/);
-            if (match) {
-              conditionName = match[1].trim();
-              additionalText = match[2].trim();
-            }
-          }
-          
-          // Find the condition in our list
-          let conditionId = null;
-          Object.entries(conditions).forEach(([groupName, items]) => {
-            items.forEach(item => {
-              if (item.condition_name === conditionName) {
-                conditionId = item.id;
-              }
-            });
-          });
-          
-          if (conditionId) {
-            newCheckboxes[conditionId] = true;
-            if (additionalText) {
-              newInputs[conditionId] = additionalText;
-            }
+        let remarkParts = [];
+        allParts.forEach(part => {
+          const found = conditionsFlat.find(cond => part === cond.condition_name);
+          if (found) {
+            newCheckboxes[found.id] = true;
+          } else {
+            remarkParts.push(part);
           }
         });
-        
+
         setCheckboxes(newCheckboxes);
-        setAdditionalInputs(newInputs);
+        setAdditionalRemark(remarkParts.join(', '));
+      } else {
+        setCheckboxes({});
+        setAdditionalRemark('');
       }
-      
-      setAdditionalRemark(remarkText);
     }
   }, [show, initialValue, conditions]);
 
-  const handleCheckboxChange = (id, checked, requiresInput) => {
-    setCheckboxes({
-      ...checkboxes,
+  const handleCheckboxChange = (id, checked) => {
+    setCheckboxes(prev => ({
+      ...prev,
       [id]: checked
-    });
-    
-    if (!checked && additionalInputs[id]) {
-      const newInputs = { ...additionalInputs };
-      delete newInputs[id];
-      setAdditionalInputs(newInputs);
-    }
-  };
-
-  const handleInputChange = (id, value) => {
-    setAdditionalInputs({
-      ...additionalInputs,
-      [id]: value
-    });
+    }));
   };
 
   const handleSave = () => {
-    // Gather selected conditions
+    // Gather checked conditions
     const selectedConditions = [];
-    
     Object.entries(conditions).forEach(([groupName, items]) => {
       items.forEach(item => {
         if (checkboxes[item.id]) {
-          const conditionName = item.condition_name;
-          const additionalText = additionalInputs[item.id];
-          
-          if (additionalText) {
-            selectedConditions.push(`${conditionName} (${additionalText})`);
-          } else {
-            selectedConditions.push(conditionName);
-          }
+          selectedConditions.push(item.condition_name);
         }
       });
     });
-    
-    const conditionText = selectedConditions.join(', ');
-    const remarkText = additionalRemark.trim();
-    const finalText = remarkText ? `${conditionText}\n${remarkText}` : conditionText;
-    
-    onSave(finalText);
+
+    let result = selectedConditions.join(', ');
+    if (additionalRemark && additionalRemark.trim()) {
+      result = result ? result + ', ' + additionalRemark.trim() : additionalRemark.trim();
+    }
+    onSave(result);
   };
 
   return (
-    <Modal show={show} onHide={onHide} size="lg">
+    <Modal show={show} onHide={onHide} size="lg" centered>
       <Modal.Header closeButton>
-        <Modal.Title>เพิ่มเงื่อนไขและหมายเหตุ</Modal.Title>
+        <Modal.Title>เลือกเงื่อนไขและหมายเหตุ</Modal.Title>
       </Modal.Header>
       <Modal.Body>
         <Form>
-          <h6>เงื่อนไขการเปิดบิล</h6>
-          
+          <h6 className="mb-3">เงื่อนไขการเปิดบิล</h6>
           {Object.entries(conditions).map(([groupName, items]) => (
-            <div className="card mb-3 shadow-sm" key={groupName}>
-              <div className="card-header bg-primary text-white">{groupName}</div>
+            <div className="card mb-3 shadow-sm border-0" key={groupName}>
+              <div className="card-header bg-primary text-white py-2">{groupName}</div>
               <div className="card-body">
-                {items.map(item => (
-                  <div key={item.id}>
-                    <Form.Check
-                      type="checkbox"
-                      id={`cond-${item.id}`}
-                      label={item.condition_name}
-                      checked={checkboxes[item.id] || false}
-                      onChange={(e) => handleCheckboxChange(item.id, e.target.checked, item.is_require_input)}
-                      className="mb-2"
-                    />
-                    
-                    {item.is_require_input && checkboxes[item.id] && (
-                      <Form.Group className="mb-3">
-                        <Form.Control
-                          type="text"
-                          placeholder="ระบุข้อมูลเพิ่มเติม"
-                          value={additionalInputs[item.id] || ''}
-                          onChange={(e) => handleInputChange(item.id, e.target.value)}
-                          size="sm"
-                        />
-                      </Form.Group>
-                    )}
-                  </div>
-                ))}
+                {items
+                  .filter(item => !!item.condition_name && item.condition_name !== '0')
+                  .map(item => (
+                    <div key={item.id} className="mb-2">
+                      <Form.Check
+                        type="checkbox"
+                        id={`cond-${item.id}`}
+                        label={item.condition_name}
+                        checked={!!checkboxes[item.id]}
+                        onChange={e => handleCheckboxChange(item.id, e.target.checked)}
+                        className="mb-1"
+                      />
+                    </div>
+                  ))}
               </div>
             </div>
           ))}
-          
+
           <div className="mt-4">
-            <h6>หมายเหตุเพิ่มเติม</h6>
+            <h6>หมายเหตุเพิ่มเติม (จะต่อท้ายด้วย comma)</h6>
             <Form.Control
               as="textarea"
-              rows={4}
+              rows={3}
               placeholder="ระบุหมายเหตุเพิ่มเติม"
               value={additionalRemark}
-              onChange={(e) => setAdditionalRemark(e.target.value)}
+              onChange={e => setAdditionalRemark(e.target.value)}
             />
+            <Form.Text muted>
+              หมายเหตุนี้จะถูกต่อท้ายรายการด้วย comma
+            </Form.Text>
           </div>
         </Form>
       </Modal.Body>

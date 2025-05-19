@@ -9,11 +9,10 @@ const LoginPage = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // If user is fully logged in, redirect to dashboard
+    // Redirect if user is already logged in or has pending registration
     if (currentUser) {
       navigate('/');
     } else if (pendingRegistration) {
-      // If registration is pending, redirect to registration page
       navigate('/register');
     }
   }, [currentUser, pendingRegistration, navigate]);

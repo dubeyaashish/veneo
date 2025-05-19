@@ -351,3 +351,33 @@ body {
     margin-bottom: 10px;
   }
 }
+
+.floating-action-button {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  background: #0d6efd;
+  color: #fff;
+  padding: 1rem 1.15rem;
+  border-radius: 50%;
+  font-size: 1.7rem;
+  box-shadow: 0 4px 20px rgba(13, 110, 253, 0.18);
+  z-index: 1050;
+  transition: background 0.2s;
+  text-align: center;
+}
+.floating-action-button:hover {
+  background: #0956c5;
+  color: #fff;
+}
+
+.loading-spinner-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(255,255,255,0.6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}

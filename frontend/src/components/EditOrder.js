@@ -1,4 +1,3 @@
-// src/components/EditOrder.js
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
@@ -13,7 +12,7 @@ const EditOrder = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { currentUser } = useAuth();
-  
+
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState(null);
@@ -34,15 +33,20 @@ const EditOrder = () => {
   const [collapseStates, setCollapseStates] = useState({});
   const [isMyOrder, setIsMyOrder] = useState(false);
 
+  // NEW: Items View Mode (card/table)
+  const [itemsViewMode, setItemsViewMode] = useState('card');
+  // Collapse/Expand all in card mode
+  const [allCollapsed, setAllCollapsed] = useState(false);
+
   useEffect(() => {
     const fetchOrder = async () => {
       try {
         setLoading(true);
         const response = await axios.get(`${API_URL}/order/${id}`);
         setOrderData(response.data);
-        
+
         const so = response.data.so;
-        
+
         // Check if this order belongs to the current user (by staff code)
         if (currentUser?.staff_code) {
           try {
@@ -54,7 +58,7 @@ const EditOrder = () => {
             console.error('Error checking order ownership:', error);
           }
         }
-        
+
         const initialFormData = {
           memo: so.memo || '',
           otherrefnum: so.otherRefNum || '',
@@ -72,16 +76,16 @@ const EditOrder = () => {
             location: item.inventorylocation?.id || ''
           }))
         };
-        
+
         setFormData(initialFormData);
-        
+
         // Initialize all items as expanded
         const initialCollapseStates = {};
         response.data.items.forEach((item, i) => {
           initialCollapseStates[i] = false;
         });
         setCollapseStates(initialCollapseStates);
-        
+
         setLoading(false);
       } catch (err) {
         console.error('Error fetching order:', err);
@@ -89,10 +93,10 @@ const EditOrder = () => {
         setLoading(false);
       }
     };
-    
+
     fetchOrder();
   }, [id, currentUser]);
-  
+
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData({
@@ -100,37 +104,48 @@ const EditOrder = () => {
       [name]: value
     });
   };
-  
+
   const handleItemChange = (index, field, value) => {
     const updatedItems = [...formData.items];
     updatedItems[index] = {
       ...updatedItems[index],
       [field]: value
     };
-    
+
     setFormData({
       ...formData,
       items: updatedItems
     });
   };
-  
+
+  // Card collapse toggle per row
   const toggleCollapse = (index) => {
-    setCollapseStates({
-      ...collapseStates,
-      [index]: !collapseStates[index]
-    });
+    setCollapseStates(prev => ({
+      ...prev,
+      [index]: !prev[index]
+    }));
   };
-  
+
+  // Collapse/Expand all for cards
+  const handleCollapseAll = (collapse = true) => {
+    const newStates = {};
+    formData.items.forEach((item, i) => {
+      newStates[i] = collapse;
+    });
+    setCollapseStates(newStates);
+    setAllCollapsed(collapse);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
+
     try {
       setProcessing(true);
       const response = await axios.post(`${API_URL}/order/${id}/update`, formData);
-      
+
       setLogs(response.data.logs);
       setShowLogsModal(true);
-      
+
       toast.success('Sales Order updated successfully');
       setProcessing(false);
     } catch (err) {
@@ -139,7 +154,7 @@ const EditOrder = () => {
       setProcessing(false);
     }
   };
-  
+
   const handleRemarkSave = (remarkText) => {
     setFormData({
       ...formData,
@@ -147,7 +162,7 @@ const EditOrder = () => {
     });
     setShowRemarkModal(false);
   };
-  
+
   if (loading) {
     return (
       <div className="loading-spinner">
@@ -158,7 +173,7 @@ const EditOrder = () => {
       </div>
     );
   }
-  
+
   if (error) {
     return (
       <div className="row justify-content-center">
@@ -179,21 +194,21 @@ const EditOrder = () => {
       </div>
     );
   }
-  
+
   if (!orderData) return null;
-  
+
   const { so, venioSONumber, customerName, shippingAddresses, locations } = orderData;
-  
+
   let statusLabel = "รอดำเนินการ";
   let statusClass = "status-pending";
   if (so.status === 'Pending Fulfillment') {
     statusLabel = "รออนุมัติ";
     statusClass = "status-pending";
   } else if (so.status === 'Pending Billing') {
-    statusLabel = "อนุมัติแล้ว";  
+    statusLabel = "อนุมัติแล้ว";
     statusClass = "status-approved";
   }
-  
+
   return (
     <div>
       <div className="row mb-4">
@@ -209,7 +224,7 @@ const EditOrder = () => {
           )}
         </div>
       </div>
-      
+
       {venioSONumber && (
         <div className="venio-info mb-4">
           <i className="bi bi-link-45deg"></i>
@@ -219,11 +234,12 @@ const EditOrder = () => {
           </div>
         </div>
       )}
-      
+
       <form onSubmit={handleSubmit} className="form-container">
+        {/* Order Main Info */}
         <div className="row mb-4">
           <div className="col-md-12">
-            <div className="card">
+            <div className="card shadow-sm rounded-4">
               <div className="card-header bg-primary text-white">
                 <i className="bi bi-info-circle"></i> ข้อมูลหลัก
               </div>
@@ -233,11 +249,11 @@ const EditOrder = () => {
                     <label className="form-label">Memo:</label>
                     <div className="input-group">
                       <span className="input-group-text"><i className="bi bi-pencil"></i></span>
-                      <input 
-                        type="text" 
-                        className="form-control" 
-                        name="memo" 
-                        value={formData.memo} 
+                      <input
+                        type="text"
+                        className="form-control"
+                        name="memo"
+                        value={formData.memo}
                         onChange={handleInputChange}
                       />
                     </div>
@@ -246,11 +262,11 @@ const EditOrder = () => {
                     <label className="form-label">Reference #:</label>
                     <div className="input-group">
                       <span className="input-group-text"><i className="bi bi-hash"></i></span>
-                      <input 
-                        type="text" 
-                        className="form-control" 
-                        name="otherrefnum" 
-                        value={formData.otherrefnum} 
+                      <input
+                        type="text"
+                        className="form-control"
+                        name="otherrefnum"
+                        value={formData.otherrefnum}
                         onChange={handleInputChange}
                       />
                     </div>
@@ -259,11 +275,11 @@ const EditOrder = () => {
                     <label className="form-label">Tran Date:</label>
                     <div className="input-group">
                       <span className="input-group-text"><i className="bi bi-calendar-date"></i></span>
-                      <input 
-                        type="date" 
-                        className="form-control" 
-                        name="tranDate" 
-                        value={formData.tranDate} 
+                      <input
+                        type="date"
+                        className="form-control"
+                        name="tranDate"
+                        value={formData.tranDate}
                         onChange={handleInputChange}
                       />
                     </div>
@@ -272,10 +288,10 @@ const EditOrder = () => {
                     <label className="form-label">Location:</label>
                     <div className="input-group">
                       <span className="input-group-text"><i className="bi bi-geo-alt"></i></span>
-                      <select 
-                        className="form-control" 
-                        name="location_id" 
-                        value={formData.location_id} 
+                      <select
+                        className="form-control"
+                        name="location_id"
+                        value={formData.location_id}
                         onChange={handleInputChange}
                       >
                         <option value="">เลือกสถานที่</option>
@@ -289,11 +305,11 @@ const EditOrder = () => {
                     <label className="form-label">Req Inv MAC5:</label>
                     <div className="input-group">
                       <span className="input-group-text"><i className="bi bi-file-text"></i></span>
-                      <input 
-                        type="text" 
-                        className="form-control" 
-                        name="custbody_ar_req_inv_mac5" 
-                        value={formData.custbody_ar_req_inv_mac5} 
+                      <input
+                        type="text"
+                        className="form-control"
+                        name="custbody_ar_req_inv_mac5"
+                        value={formData.custbody_ar_req_inv_mac5}
                         onChange={handleInputChange}
                       />
                     </div>
@@ -302,11 +318,11 @@ const EditOrder = () => {
                     <label className="form-label">Customer:</label>
                     <div className="input-group">
                       <span className="input-group-text"><i className="bi bi-person"></i></span>
-                      <input 
-                        type="text" 
-                        className="form-control" 
-                        value={customerName} 
-                        readOnly 
+                      <input
+                        type="text"
+                        className="form-control"
+                        value={customerName}
+                        readOnly
                       />
                     </div>
                   </div>
@@ -314,16 +330,16 @@ const EditOrder = () => {
                     <label className="form-label">ที่อยู่จัดส่ง:</label>
                     <div className="input-group">
                       <span className="input-group-text"><i className="bi bi-geo"></i></span>
-                      <select 
-                        className="form-control" 
-                        name="shipaddresslist" 
-                        value={formData.shipaddresslist} 
+                      <select
+                        className="form-control"
+                        name="shipaddresslist"
+                        value={formData.shipaddresslist}
                         onChange={handleInputChange}
                       >
                         <option value="">เลือกที่อยู่จัดส่ง</option>
                         {shippingAddresses.map((address) => (
-                          <option 
-                            key={address.address_internal_id} 
+                          <option
+                            key={address.address_internal_id}
                             value={address.address_internal_id}
                           >
                             {address.shipping_address}
@@ -336,11 +352,11 @@ const EditOrder = () => {
                     <label className="form-label">Remark:</label>
                     <div className="input-group">
                       <span className="input-group-text"><i className="bi bi-chat-text"></i></span>
-                      <input 
-                        type="text" 
-                        className="form-control" 
-                        value={formData.custbodyar_so_memo2} 
-                        readOnly 
+                      <input
+                        type="text"
+                        className="form-control"
+                        value={formData.custbodyar_so_memo2}
+                        readOnly
                         onClick={() => setShowRemarkModal(true)}
                       />
                     </div>
@@ -350,162 +366,284 @@ const EditOrder = () => {
             </div>
           </div>
         </div>
-        
+
+        {/* Items Section */}
         <div className="row mb-4">
           <div className="col-md-12">
-            <div className="card">
+            <div className="card shadow-sm rounded-4">
               <div className="card-header bg-primary text-white d-flex justify-content-between align-items-center">
                 <div>
                   <i className="bi bi-cart"></i> รายการสินค้า
                 </div>
-                <span className="badge bg-white text-primary">{formData.items.length} รายการ</span>
+                <span className="badge bg-white text-primary ms-2">{formData.items.length} รายการ</span>
               </div>
-              <div className="card-body">
-                {formData.items.map((item, i) => {
-                  const itemDisplay = orderData.itemMap[item.item_id] || item.item_id;
-                  return (
-                    <div className="item-card" key={i}>
-                      <div 
-                        className="item-header" 
-                        onClick={() => toggleCollapse(i)}
+              {/* Toggle and Collapse buttons */}
+              <div className="card-body pb-0">
+                <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap">
+                  {/* View Toggle */}
+                  <div>
+                    <div className="btn-group me-2 mb-2 mb-md-0" role="group" aria-label="View Toggle">
+                      <button
+                        type="button"
+                        className={`btn btn-outline-primary ${itemsViewMode === 'card' ? 'active' : ''}`}
+                        onClick={() => setItemsViewMode('card')}
                       >
-                        <h5 className="mb-0">
-                          <i className={`bi ${collapseStates[i] ? 'bi-chevron-up' : 'bi-chevron-down'}`}></i>
-                          <span className="badge bg-light text-dark me-2">{i + 1}</span>
-                          {item.description || `Item ${i + 1}`}
-                        </h5>
-                      </div>
-                      {!collapseStates[i] && (
-                        <div className="item-content">
-                          <div className="row">
-                            <div className="col-md-6 mb-3">
-                              <label className="form-label">Item:</label>
-                              <div className="input-group">
-                                <span className="input-group-text"><i className="bi bi-box"></i></span>
-                                <input 
-                                  type="text" 
-                                  className="form-control" 
-                                  value={itemDisplay} 
-                                  readOnly 
-                                />
-                              </div>
-                            </div>
-                            <div className="col-md-6 mb-3">
-                              <label className="form-label">Qty:</label>
-                              <div className="input-group">
-                                <span className="input-group-text"><i className="bi bi-123"></i></span>
-                                <input 
-                                  type="text" 
-                                  className="form-control" 
-                                  value={item.quantity} 
-                                  onChange={(e) => handleItemChange(i, 'quantity', e.target.value)} 
-                                />
-                              </div>
-                            </div>
-                            <div className="col-md-6 mb-3">
-                              <label className="form-label">Rate:</label>
-                              <div className="input-group">
-                                <span className="input-group-text"><i className="bi bi-currency-dollar"></i></span>
-                                <input 
-                                  type="text" 
-                                  className="form-control" 
-                                  value={item.rate} 
-                                  onChange={(e) => handleItemChange(i, 'rate', e.target.value)} 
-                                />
-                              </div>
-                            </div>
-                            <div className="col-md-6 mb-3">
-                              <label className="form-label">Description:</label>
-                              <div className="input-group">
-                                <span className="input-group-text"><i className="bi bi-file-text"></i></span>
-                                <input 
-                                  type="text" 
-                                  className="form-control" 
-                                  value={item.description} 
-                                  onChange={(e) => handleItemChange(i, 'description', e.target.value)} 
-                                />
-                              </div>
-                            </div>
-                            <div className="col-md-6 mb-3">
-                              <label className="form-label">Location:</label>
-                              <div className="input-group">
-                                <span className="input-group-text"><i className="bi bi-geo-alt"></i></span>
-                                <select 
-                                  className="form-control" 
-                                  value={item.location} 
-                                  onChange={(e) => handleItemChange(i, 'location', e.target.value)}
-                                >
-                                  <option value="">เลือกสถานที่</option>
-                                  {Object.entries(locations).map(([id, name]) => (
-                                    <option key={id} value={id}>{name}</option>
-                                  ))}
-                                </select>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      )}
+                        <i className="bi bi-grid-3x3-gap"></i> Card
+                      </button>
+                      <button
+                        type="button"
+                        className={`btn btn-outline-primary ${itemsViewMode === 'table' ? 'active' : ''}`}
+                        onClick={() => setItemsViewMode('table')}
+                      >
+                        <i className="bi bi-table"></i> Table
+                      </button>
                     </div>
-                  );
-                })}
+                  </div>
+                  {/* Collapse/Expand All in Card Mode */}
+                  {itemsViewMode === 'card' && (
+                    <div>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline-secondary me-2"
+                        onClick={() => handleCollapseAll(false)}
+                        disabled={!allCollapsed}
+                      >
+                        <i className="bi bi-arrows-angle-expand"></i> Expand All
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline-secondary"
+                        onClick={() => handleCollapseAll(true)}
+                        disabled={allCollapsed}
+                      >
+                        <i className="bi bi-arrows-angle-contract"></i> Collapse All
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Items Content */}
+                {itemsViewMode === 'card' ? (
+                  <>
+                    {formData.items.length === 0 && (
+                      <div className="alert alert-secondary">ไม่มีรายการสินค้า</div>
+                    )}
+                    {formData.items.map((item, i) => {
+                      const itemDisplay = orderData.itemMap[item.item_id] || item.item_id;
+                      return (
+                        <div
+                          className="card mb-3 border-0 shadow-sm item-card rounded-3"
+                          key={i}
+                          style={{ borderLeft: '5px solid #0d6efd', transition: 'box-shadow 0.2s' }}
+                        >
+                          <div
+                            className="card-header bg-light d-flex align-items-center pointer"
+                            onClick={() => toggleCollapse(i)}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            <h5 className="mb-0 flex-grow-1">
+                              <i className={`bi ${collapseStates[i] ? 'bi-chevron-up' : 'bi-chevron-down'}`}></i>
+                              <span className="badge bg-primary-subtle text-primary-emphasis ms-2 me-2">{i + 1}</span>
+                              {item.description || `Item ${i + 1}`}
+                            </h5>
+                            <span className="ms-auto text-muted small">คลิกเพื่อ {collapseStates[i] ? 'ซ่อน' : 'แสดง'}</span>
+                          </div>
+                          {!collapseStates[i] && (
+                            <div className="card-body bg-white">
+                              <div className="row g-3">
+                                <div className="col-md-4">
+                                  <label className="form-label">Item:</label>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={itemDisplay}
+                                    readOnly
+                                  />
+                                </div>
+                                <div className="col-md-2">
+                                  <label className="form-label">Qty:</label>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={item.quantity}
+                                    onChange={(e) => handleItemChange(i, 'quantity', e.target.value)}
+                                  />
+                                </div>
+                                <div className="col-md-2">
+                                  <label className="form-label">Rate:</label>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={item.rate}
+                                    onChange={(e) => handleItemChange(i, 'rate', e.target.value)}
+                                  />
+                                </div>
+                                <div className="col-md-2">
+                                  <label className="form-label">Description:</label>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={item.description}
+                                    onChange={(e) => handleItemChange(i, 'description', e.target.value)}
+                                  />
+                                </div>
+                                <div className="col-md-2">
+                                  <label className="form-label">Location:</label>
+                                  <select
+                                    className="form-control"
+                                    value={item.location}
+                                    onChange={(e) => handleItemChange(i, 'location', e.target.value)}
+                                  >
+                                    <option value="">เลือกสถานที่</option>
+                                    {Object.entries(locations).map(([id, name]) => (
+                                      <option key={id} value={id}>{name}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </>
+                ) : (
+                  <div className="table-responsive mb-3">
+                    <table className="table table-hover align-middle table-bordered bg-white rounded-3">
+                      <thead className="table-light">
+                        <tr>
+                          <th>#</th>
+                          <th>Item</th>
+                          <th>Qty</th>
+                          <th>Rate</th>
+                          <th>Description</th>
+                          <th>Location</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {formData.items.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="text-center text-muted">ไม่มีรายการสินค้า</td>
+                          </tr>
+                        ) : (
+                          formData.items.map((item, i) => {
+                            const itemDisplay = orderData.itemMap[item.item_id] || item.item_id;
+                            return (
+                              <tr key={i}>
+                                <td>{i + 1}</td>
+                                <td>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={itemDisplay}
+                                    readOnly
+                                  />
+                                </td>
+                                <td>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={item.quantity}
+                                    onChange={e => handleItemChange(i, 'quantity', e.target.value)}
+                                  />
+                                </td>
+                                <td>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={item.rate}
+                                    onChange={e => handleItemChange(i, 'rate', e.target.value)}
+                                  />
+                                </td>
+                                <td>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={item.description}
+                                    onChange={e => handleItemChange(i, 'description', e.target.value)}
+                                  />
+                                </td>
+                                <td>
+                                  <select
+                                    className="form-control"
+                                    value={item.location}
+                                    onChange={e => handleItemChange(i, 'location', e.target.value)}
+                                  >
+                                    <option value="">เลือกสถานที่</option>
+                                    {Object.entries(locations).map(([id, name]) => (
+                                      <option key={id} value={id}>{name}</option>
+                                    ))}
+                                  </select>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
           </div>
         </div>
-        
-        {processing && (
-          <div className="loading-spinner">
-            <div className="spinner-border text-primary" role="status">
-              <span className="visually-hidden">กำลังบันทึก...</span>
-            </div>
-            <p className="mt-2">กำลังบันทึกการเปลี่ยนแปลง...</p>
-          </div>
-        )}
-        
+
+        {/* Sticky Save/Cancel Bar */}
         <div className="row">
-          <div className="col-md-12 text-center action-buttons">
-            <button type="submit" className="btn btn-primary btn-lg" disabled={processing}>
+          <div className="col-md-12 text-center action-buttons position-sticky bottom-0 bg-white py-3" style={{ zIndex: 999 }}>
+            <button type="submit" className="btn btn-primary btn-lg mx-2" disabled={processing}>
               <i className="bi bi-save"></i> บันทึกการเปลี่ยนแปลง
             </button>
-            <button 
-              type="button" 
-              className="btn btn-secondary btn-lg"
+            <button
+              type="button"
+              className="btn btn-secondary btn-lg mx-2"
               onClick={() => navigate(-1)}
               disabled={processing}
             >
               <i className="bi bi-x-circle"></i> ยกเลิก
             </button>
-            <a 
-              href={`https://7446749${so.realm?.includes('SB') ? '-sb1' : ''}.app.netsuite.com/app/accounting/transactions/salesord.nl?id=${id}`} 
-              target="_blank" 
-              rel="noopener noreferrer" 
-              className="btn btn-info btn-lg"
+            <a
+              href={`https://7446749${so.realm?.includes('SB') ? '-sb1' : ''}.app.netsuite.com/app/accounting/transactions/salesord.nl?id=${id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn-info btn-lg mx-2"
             >
               <i className="bi bi-box-arrow-up-right"></i> เปิดใน NetSuite
             </a>
           </div>
         </div>
       </form>
-      
+
+      {/* Floating action to top */}
       <a href="#top" className="floating-action-button">
         <i className="bi bi-arrow-up"></i>
       </a>
-      
+
       {/* Remark Modal */}
-      <RemarkModal 
-        show={showRemarkModal} 
+      <RemarkModal
+        show={showRemarkModal}
         onHide={() => setShowRemarkModal(false)}
         onSave={handleRemarkSave}
         initialValue={formData.custbodyar_so_memo2}
         conditions={orderData.conditions || {}}
       />
-      
+
       {/* Logs Modal */}
-      <LogsModal 
-        show={showLogsModal} 
+      <LogsModal
+        show={showLogsModal}
         onHide={() => setShowLogsModal(false)}
         logs={logs}
       />
+
+      {/* Loading spinner (save) */}
+      {processing && (
+        <div className="loading-spinner-overlay">
+          <div className="spinner-border text-primary" role="status">
+            <span className="visually-hidden">กำลังบันทึก...</span>
+          </div>
+          <p className="mt-2">กำลังบันทึกการเปลี่ยนแปลง...</p>
+        </div>
+      )}
     </div>
   );
 };

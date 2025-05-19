@@ -1,4 +1,4 @@
-// src/components/RegistrationPage.js
+// src/components/RegisterPage.js - Updated to match your backend
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
@@ -12,31 +12,70 @@ const RegistrationPage = () => {
   
   const [formData, setFormData] = useState({
     email: '',
-    employeeId: ''
+    employeeId: '',
+    department: ''
   });
+  const [departments, setDepartments] = useState([]);
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
+  const [fetchingDepartments, setFetchingDepartments] = useState(true);
 
   useEffect(() => {
-    // If no pending registration, redirect to login
+    // Redirect to login if no pending registration
     if (!pendingRegistration) {
       navigate('/login');
     }
   }, [pendingRegistration, navigate]);
 
+  // Fetch departments for dropdown
+  useEffect(() => {
+    const fetchDepartments = async () => {
+      try {
+        setFetchingDepartments(true);
+        console.log('Fetching departments from:', `${API_URL}/departments`);
+        
+        const response = await axios.get(`${API_URL}/departments`);
+        console.log('Departments response:', response.data);
+        
+        if (response.data.success && Array.isArray(response.data.departments)) {
+          // Extract department names from the response
+          setDepartments(response.data.departments.map(dept => dept.Name_no_hierarchy));
+        } else {
+          console.error('Failed to fetch departments:', response.data);
+          setErrors(prev => ({
+            ...prev, 
+            departments: 'Failed to load departments from server'
+          }));
+        }
+      } catch (error) {
+        console.error('Error fetching departments:', error);
+        setErrors(prev => ({
+          ...prev, 
+          departments: `Error loading departments: ${error.message}`
+        }));
+      } finally {
+        setFetchingDepartments(false);
+      }
+    };
+
+    fetchDepartments();
+  }, []);
+
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setFormData({
-      ...formData,
-      [name]: value
-    });
+    console.log(`Changed ${name} to ${value}`);
     
-    // Clear error when user types
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+    
+    // Clear errors as user types
     if (errors[name]) {
-      setErrors({
-        ...errors,
+      setErrors(prev => ({
+        ...prev,
         [name]: null
-      });
+      }));
     }
   };
 
@@ -47,12 +86,17 @@ const RegistrationPage = () => {
     if (!formData.email) {
       newErrors.email = 'Email is required';
     } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
-      newErrors.email = 'Email address is invalid';
+      newErrors.email = 'Please enter a valid email address';
     }
     
     // Validate employee ID
     if (!formData.employeeId) {
       newErrors.employeeId = 'Employee ID is required';
+    }
+    
+    // Validate department
+    if (!formData.department) {
+      newErrors.department = 'Department is required';
     }
     
     setErrors(newErrors);
@@ -69,28 +113,35 @@ const RegistrationPage = () => {
     try {
       setLoading(true);
       
-      // Combine telegram data with form data
+      // Prepare data for the API call
       const userData = {
-        ...pendingRegistration,
+        telegram_id: pendingRegistration.telegram_id,
         email: formData.email,
         employee_id: formData.employeeId,
-        registration_complete: true
+        department: formData.department
       };
       
+      console.log('Submitting registration data:', userData);
+      
+      // Send registration data to the server
       const response = await axios.post(`${API_URL}/auth/complete-registration`, userData);
       
+      console.log('Registration response:', response.data);
+      
       if (response.data.success) {
-        // Update user in auth context with the complete data
+        // Complete registration in auth context
         completeRegistration(response.data.user);
-        
-        // Redirect to dashboard
         navigate('/');
       } else {
-        setErrors({ submit: response.data.message || 'Registration failed. Please try again.' });
+        setErrors({
+          submit: response.data.message || 'Registration failed. Please try again.'
+        });
       }
     } catch (error) {
       console.error('Registration error:', error);
-      setErrors({ submit: 'An error occurred. Please try again.' });
+      setErrors({
+        submit: error.response?.data?.message || 'An error occurred during registration. Please try again.'
+      });
     } finally {
       setLoading(false);
     }
@@ -101,6 +152,7 @@ const RegistrationPage = () => {
     navigate('/login');
   };
 
+  // If no pending registration data, don't render the form
   if (!pendingRegistration) {
     return null;
   }
@@ -119,6 +171,7 @@ const RegistrationPage = () => {
               
               {errors.submit && (
                 <div className="alert alert-danger mb-4" role="alert">
+                  <i className="bi bi-exclamation-triangle-fill me-2"></i>
                   {errors.submit}
                 </div>
               )}
@@ -160,11 +213,52 @@ const RegistrationPage = () => {
                   {errors.employeeId && <div className="invalid-feedback d-block">{errors.employeeId}</div>}
                 </div>
                 
+                <div className="mb-4">
+                  <label htmlFor="department" className="form-label">แผนก <span className="text-danger">*</span></label>
+                  <div className="input-group">
+                    <span className="input-group-text"><i className="bi bi-building"></i></span>
+                    <select
+                      className={`form-control ${errors.department ? 'is-invalid' : ''}`}
+                      id="department"
+                      name="department"
+                      value={formData.department}
+                      onChange={handleChange}
+                      required
+                      disabled={fetchingDepartments}
+                    >
+                      <option value="">-- เลือกแผนก --</option>
+                      {departments.map((deptName, index) => (
+                        <option key={index} value={deptName}>
+                          {deptName}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {errors.department && <div className="invalid-feedback d-block">{errors.department}</div>}
+                  {errors.departments && (
+                    <div className="text-danger small mt-1">
+                      {errors.departments}
+                    </div>
+                  )}
+                  {fetchingDepartments && (
+                    <div className="text-muted small mt-1">
+                      <i className="bi bi-hourglass-split me-1"></i> Loading departments...
+                    </div>
+                  )}
+                  
+                  {/* Debug info for development */}
+                  {process.env.NODE_ENV === 'development' && departments.length > 0 && (
+                    <div className="text-muted small mt-2">
+                      Loaded {departments.length} departments
+                    </div>
+                  )}
+                </div>
+                
                 <div className="d-grid gap-2 mt-4">
                   <button
                     type="submit"
                     className="btn btn-primary btn-lg"
-                    disabled={loading}
+                    disabled={loading || fetchingDepartments}
                   >
                     {loading ? (
                       <>

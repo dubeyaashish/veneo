@@ -20,356 +20,233 @@ const getDbConnection = async () => {
   return mysql.createConnection(config.db);
 };
 
-// OAuth header builder (similar to build_oauth_header in PHP)
-const buildOAuthHeader = (url, method, consumer_key, consumer_secret, token, token_secret, realm) => {
-  const timestamp = Math.floor(Date.now() / 1000);
-  const nonce = crypto.randomBytes(16).toString('hex');
-  
-  const oauthParams = {
-    oauth_consumer_key: consumer_key,
-    oauth_token: token,
-    oauth_signature_method: 'HMAC-SHA256',
-    oauth_timestamp: timestamp,
-    oauth_nonce: nonce,
-    oauth_version: '1.0'
-  };
-  
-  // Sort params
-  const sortedParams = Object.keys(oauthParams).sort().reduce((acc, key) => {
-    acc[key] = oauthParams[key];
-    return acc;
-  }, {});
-  
-  // Create base string params
-  const baseParams = [];
-  for (const [key, value] of Object.entries(sortedParams)) {
-    baseParams.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
-  }
-  
-  // Create base string
-  const baseString = `${method.toUpperCase()}&${encodeURIComponent(url)}&${encodeURIComponent(baseParams.join('&'))}`;
-  
-  // Create signing key
-  const signingKey = `${encodeURIComponent(consumer_secret)}&${encodeURIComponent(token_secret)}`;
-  
-  // Create signature
-  const signature = crypto.createHmac('sha256', signingKey).update(baseString).digest('base64');
-  oauthParams.oauth_signature = signature;
-  
-  // Create header
-  let header = `OAuth realm="${realm}", `;
-  for (const [key, value] of Object.entries(oauthParams)) {
-    header += `${encodeURIComponent(key)}="${encodeURIComponent(value)}", `;
-  }
-  
-  return header.slice(0, -2); // Remove trailing comma and space
-};
-
-// Get billing conditions, item mappings, and locations
-const getConditions = async (conn) => {
+// Authentication endpoint
+app.post('/api/auth/telegram', async (req, res) => {
   try {
-    const [rows] = await conn.execute('SELECT * FROM billing_conditions ORDER BY condition_group, id');
+    const telegramUser = req.body;
     
-    // Group by condition_group
-    const conditions = {};
-    for (const row of rows) {
-      if (!conditions[row.condition_group]) {
-        conditions[row.condition_group] = [];
-      }
-      conditions[row.condition_group].push(row);
+    // Verify Telegram data (uncomment in production)
+    // const isValid = verifyTelegramData(telegramUser, config.telegram.bot_token);
+    // if (!isValid) {
+    //   return res.status(400).json({ success: false, message: 'Invalid Telegram data' });
+    // }
+    
+    if (!telegramUser.id || !telegramUser.first_name) {
+      return res.status(400).json({ success: false, message: 'Invalid Telegram data' });
     }
     
-    return conditions;
-  } catch (error) {
-    console.error('Error fetching conditions:', error);
-    return {};
-  }
-};
-
-const getItemMap = async (conn) => {
-  try {
-    const [rows] = await conn.execute('SELECT Internal_ID, Item FROM erp_price');
+    const conn = await getDbConnection();
     
-    const itemMap = {};
-    for (const row of rows) {
-      itemMap[row.Internal_ID] = row.Item;
+    // Check if user exists
+    const [userRows] = await conn.execute(
+      'SELECT * FROM users WHERE telegram_id = ?',
+      [telegramUser.id]
+    );
+    
+    let user;
+    let isNewUser = false;
+    
+    if (userRows.length === 0) {
+      // New user - create account
+      const [result] = await conn.execute(
+        'INSERT INTO users (telegram_id, first_name, last_name, username, photo_url, auth_date, registration_complete) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [
+          telegramUser.id,
+          telegramUser.first_name,
+          telegramUser.last_name || '',
+          telegramUser.username || '',
+          telegramUser.photo_url || '',
+          telegramUser.auth_date || Math.floor(Date.now() / 1000),
+          false  // Registration incomplete for new users
+        ]
+      );
+      
+      const [newUser] = await conn.execute('SELECT * FROM users WHERE id = ?', [result.insertId]);
+      user = newUser[0];
+      isNewUser = true;
+    } else {
+      // Existing user - update info
+      user = userRows[0];
+      
+      await conn.execute(
+        'UPDATE users SET first_name = ?, last_name = ?, username = ?, photo_url = ?, auth_date = ? WHERE telegram_id = ?',
+        [
+          telegramUser.first_name,
+          telegramUser.last_name || '',
+          telegramUser.username || '',
+          telegramUser.photo_url || '',
+          telegramUser.auth_date || Math.floor(Date.now() / 1000),
+          telegramUser.id
+        ]
+      );
     }
     
-    return itemMap;
-  } catch (error) {
-    console.error('Error fetching item map:', error);
-    return {};
-  }
-};
-
-const getLocations = async (conn) => {
-  try {
-    const [rows] = await conn.execute('SELECT Internal_ID, Name FROM erp_location');
+    // Check if user has a staffCode mapping
+    const [staffRows] = await conn.execute(
+      'SELECT * FROM staff_telegram_mapping WHERE telegram_id = ?',
+      [telegramUser.id]
+    );
     
-    const locations = {};
-    for (const row of rows) {
-      locations[row.Internal_ID] = row.Name;
-    }
+    const userResponse = {
+      id: user.id,
+      telegram_id: user.telegram_id,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      username: user.username,
+      photo_url: user.photo_url,
+      email: user.email,
+      employee_id: user.employee_id,
+      staff_code: staffRows.length > 0 ? staffRows[0].staff_code : null,
+      registration_complete: isNewUser ? false : (user.registration_complete === 1)
+    };
     
-    return locations;
-  } catch (error) {
-    console.error('Error fetching locations:', error);
-    return {};
-  }
-};
-
-// Fetch order from NetSuite
-const fetchSalesOrder = async (orderId) => {
-  const soUrl = `${config.base_url}/salesOrder/${orderId}`;
-  const authHeader = buildOAuthHeader(
-    soUrl, 
-    'GET', 
-    config.consumer_key, 
-    config.consumer_secret, 
-    config.token, 
-    config.token_secret, 
-    config.realm
-  );
-  
-  try {
-    const response = await axios.get(soUrl, {
-      headers: {
-        'Authorization': authHeader
-      }
+    await conn.end();
+    
+    res.json({
+      success: true,
+      user: userResponse
     });
-    
-    return response.data;
   } catch (error) {
-    console.error('Error fetching sales order:', error);
-    throw error;
-  }
-};
-
-// Fetch order items from NetSuite
-const fetchOrderItems = async (orderId) => {
-  const itemUrl = `${config.base_url}/salesOrder/${orderId}/item`;
-  const authHeader = buildOAuthHeader(
-    itemUrl, 
-    'GET', 
-    config.consumer_key, 
-    config.consumer_secret, 
-    config.token, 
-    config.token_secret, 
-    config.realm
-  );
-  
-  try {
-    const response = await axios.get(itemUrl, {
-      headers: {
-        'Authorization': authHeader
-      }
+    console.error('Error in Telegram authentication:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Authentication failed'
     });
+  }
+});
+
+// Complete registration endpoint
+// Modify the existing complete-registration endpoint in server.js
+app.post('/api/auth/complete-registration', async (req, res) => {
+  try {
+    const userData = req.body;
     
-    const items = [];
+    if (!userData.telegram_id) {
+      return res.status(400).json({ success: false, message: 'Invalid user data' });
+    }
     
-    // Fetch each line item
-    for (const entry of response.data.items || []) {
-      const href = entry.links[0]?.href;
-      if (href) {
-        const lineAuthHeader = buildOAuthHeader(
-          href, 
-          'GET', 
-          config.consumer_key, 
-          config.consumer_secret, 
-          config.token, 
-          config.token_secret, 
-          config.realm
+    if (!userData.email || !userData.employee_id || !userData.department) {
+      return res.status(400).json({ success: false, message: 'Email, Employee ID, and Department are required' });
+    }
+    
+    // Validate email format
+    const emailRegex = /\S+@\S+\.\S+/;
+    if (!emailRegex.test(userData.email)) {
+      return res.status(400).json({ success: false, message: 'Invalid email format' });
+    }
+    
+    const conn = await getDbConnection();
+    
+    // Check if user exists
+    const [userRows] = await conn.execute(
+      'SELECT * FROM users WHERE telegram_id = ?',
+      [userData.telegram_id]
+    );
+    
+    if (userRows.length === 0) {
+      await conn.end();
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
+    // Update user with email, employee ID, department, and mark registration as complete
+    await conn.execute(
+      'UPDATE users SET email = ?, employee_id = ?, department = ?, registration_complete = TRUE WHERE telegram_id = ?',
+      [userData.email, userData.employee_id, userData.department, userData.telegram_id]
+    );
+    
+    // Check if we can map this employee ID to a staff code
+    try {
+      // Create or update the staff_telegram_mapping table
+      const [mappingRows] = await conn.execute(
+        'SELECT * FROM staff_telegram_mapping WHERE telegram_id = ?',
+        [userData.telegram_id]
+      );
+      
+      if (mappingRows.length === 0) {
+        // Create a new mapping
+        await conn.execute(
+          'INSERT INTO staff_telegram_mapping (telegram_id, staff_code) VALUES (?, ?)',
+          [userData.telegram_id, userData.employee_id]
         );
-        
-        const lineResponse = await axios.get(href, {
-          headers: {
-            'Authorization': lineAuthHeader
-          }
-        });
-        
-        const item = lineResponse.data;
-        if (item) {
-          item.href = href;
-          items.push(item);
-        }
+      } else {
+        // Update existing mapping
+        await conn.execute(
+          'UPDATE staff_telegram_mapping SET staff_code = ? WHERE telegram_id = ?',
+          [userData.employee_id, userData.telegram_id]
+        );
       }
+    } catch (error) {
+      console.error('Error creating staff mapping:', error);
+      // Continue even if mapping fails - we have the essential registration data
     }
     
-    return items;
-  } catch (error) {
-    console.error('Error fetching order items:', error);
-    throw error;
-  }
-};
-
-// Get Venio SO number by NetSuite ID
-const getVenioSONumber = async (netsuiteId) => {
-  try {
-    const conn = await getDbConnection();
-    const [rows] = await conn.execute(
-      'SELECT salesOrderNo FROM sid_v_so WHERE netsuite_id = ? LIMIT 1',
-      [netsuiteId]
-    );
-    await conn.end();
-    
-    return rows.length > 0 ? rows[0].salesOrderNo : null;
-  } catch (error) {
-    console.error('Error fetching Venio SO:', error);
-    return null;
-  }
-};
-
-// Get customer name and shipping addresses
-const getCustomerInfo = async (customerId) => {
-  try {
-    const conn = await getDbConnection();
-    
-    // Get customer name
-    const [nameRows] = await conn.execute(
-      'SELECT DISTINCT name FROM erp_shipto WHERE internal_id = ?',
-      [customerId]
-    );
-    
-    // Get shipping addresses
-    const [addressRows] = await conn.execute(
-      'SELECT address_internal_id, shipping_address FROM erp_shipto WHERE internal_id = ?',
-      [customerId]
+    // Get the updated user data
+    const [updatedRows] = await conn.execute(
+      'SELECT u.*, stm.staff_code FROM users u LEFT JOIN staff_telegram_mapping stm ON u.telegram_id = stm.telegram_id WHERE u.telegram_id = ?',
+      [userData.telegram_id]
     );
     
     await conn.end();
     
-    return {
-      customerName: nameRows.length > 0 ? nameRows[0].name : '',
-      shippingAddresses: addressRows
-    };
-  } catch (error) {
-    console.error('Error fetching customer info:', error);
-    return { customerName: '', shippingAddresses: [] };
-  }
-};
-
-// Update sales order in NetSuite
-const updateSalesOrder = async (orderId, headerChanges) => {
-  const orderUrl = `${config.base_url}/salesOrder/${orderId}`;
-  const authHeader = buildOAuthHeader(
-    orderUrl, 
-    'PATCH', 
-    config.consumer_key, 
-    config.consumer_secret, 
-    config.token, 
-    config.token_secret, 
-    config.realm
-  );
-  
-  try {
-    const response = await axios.patch(orderUrl, headerChanges, {
-      headers: {
-        'Authorization': authHeader,
-        'Content-Type': 'application/json'
-      }
-    });
+    if (updatedRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found after update' });
+    }
     
-    return {
+    const user = updatedRows[0];
+    
+    const userResponse = {
+      id: user.id,
+      telegram_id: user.telegram_id,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      username: user.username,
+      photo_url: user.photo_url,
+      email: user.email,
+      employee_id: user.employee_id,
+      department: user.department,
+      staff_code: user.staff_code,
+      registration_complete: user.registration_complete === 1
+    };
+    
+    res.json({
       success: true,
-      status: response.status,
-      data: response.data
-    };
-  } catch (error) {
-    console.error('Error updating sales order:', error);
-    return {
-      success: false,
-      status: error.response?.status || 500,
-      message: error.message
-    };
-  }
-};
-
-// Update sales order item in NetSuite
-const updateOrderItem = async (itemHref, changes) => {
-  const authHeader = buildOAuthHeader(
-    itemHref, 
-    'PATCH', 
-    config.consumer_key, 
-    config.consumer_secret, 
-    config.token, 
-    config.token_secret, 
-    config.realm
-  );
-  
-  try {
-    const response = await axios.patch(itemHref, changes, {
-      headers: {
-        'Authorization': authHeader,
-        'Content-Type': 'application/json'
-      }
+      user: userResponse
     });
+  } catch (error) {
+    console.error('Error in registration:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Registration failed'
+    });
+  }
+});
+// Get orders associated with a staff member
+app.get('/api/orders/staff/:staffCode', async (req, res) => {
+  try {
+    const { staffCode } = req.params;
     
-    return {
+    const conn = await getDbConnection();
+    
+    // Get orders for this staff code
+    const [orders] = await conn.execute(
+      'SELECT * FROM sid_v_so WHERE staffCode = ? ORDER BY salesOrderDate DESC LIMIT 20',
+      [staffCode]
+    );
+    
+    await conn.end();
+    
+    res.json({
       success: true,
-      status: response.status,
-      data: response.data
-    };
-  } catch (error) {
-    console.error('Error updating order item:', error);
-    return {
-      success: false,
-      status: error.response?.status || 500,
-      message: error.message
-    };
-  }
-};
-
-// Verify Telegram login data
-const verifyTelegramData = (data, botToken) => {
-  if (!data || !data.hash || !botToken) {
-    return false;
-  }
-
-  // Create a check string
-  const dataCheckArr = Object.keys(data)
-    .filter(key => key !== 'hash')
-    .map(key => `${key}=${data[key]}`);
-  
-  dataCheckArr.sort();
-  const dataCheckString = dataCheckArr.join('\n');
-  
-  // Create a secret key from bot token
-  const secretKey = crypto
-    .createHash('sha256')
-    .update(botToken)
-    .digest();
-  
-  // Sign the data check string
-  const hash = crypto
-    .createHmac('sha256', secretKey)
-    .update(dataCheckString)
-    .digest('hex');
-  
-  return hash === data.hash;
-};
-
-// Send notification via Telegram
-const sendTelegramNotification = async (chatId, message) => {
-  try {
-    const telegramData = {
-      chat_id: chatId,
-      message: message
-    };
-    
-    await axios.post(config.telegram.notification_url, telegramData, {
-      headers: {
-        'Content-Type': 'application/json'
-      }
+      orders
     });
-    
-    return true;
   } catch (error) {
-    console.error('Error sending Telegram notification:', error);
-    return false;
+    console.error('Error fetching staff orders:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch orders'
+    });
   }
-};
-
-// Routes
+});
 
 // Get order details
 app.get('/api/order/:id', async (req, res) => {
@@ -415,6 +292,9 @@ app.get('/api/order/:id', async (req, res) => {
     res.status(500).json({ error: 'Server error', message: error.message });
   }
 });
+
+// Update order
+// In server.js - Modify the existing POST route for updating orders
 
 // Update order
 app.post('/api/order/:id/update', async (req, res) => {
@@ -544,20 +424,23 @@ app.post('/api/order/:id/update', async (req, res) => {
       }
     }
     
-    // Check if order has a staffCode and send notification if updates were made
+    // Check if order has been modified and send notifications
     if (Object.keys(headerChanges).length > 0 || itemsUpdated.length > 0) {
       try {
         // Get the staff code associated with this order
         const conn = await getDbConnection();
         const [orderRows] = await conn.execute(
-          'SELECT staffCode FROM sid_v_so WHERE netsuite_id = ?',
+          'SELECT so.staffCode, so.salesOrderNo, so.salesOrderSubject FROM sid_v_so so WHERE netsuite_id = ?',
           [orderId]
         );
         
         if (orderRows.length > 0) {
           const staffCode = orderRows[0].staffCode;
+          const soNo = orderRows[0].salesOrderNo;
+          const soSubject = orderRows[0].salesOrderSubject;
+          const soUrl = `${config.accounting_url}${orderId}`;
           
-          // Look up the Telegram ID for this staff code
+          // 1. Send notification to the staff member responsible for the order
           const [mappingRows] = await conn.execute(
             'SELECT telegram_id FROM staff_telegram_mapping WHERE staff_code = ?',
             [staffCode]
@@ -565,21 +448,38 @@ app.post('/api/order/:id/update', async (req, res) => {
           
           if (mappingRows.length > 0) {
             const telegramId = mappingRows[0].telegram_id;
-            const soUrl = `${config.accounting_url}${orderId}`;
             
-            // Send personal notification
-            const message = `🔄 Sales Order #${orderId} อัปเดตเรียบร้อยแล้ว\n` +
-                           `📝 การเปลี่ยนแปลง: ${Object.keys(headerChanges).length} รายการในส่วนหัว, ${itemsUpdated.length} รายการในสินค้า\n` +
-                           `🔗 ดูใน NetSuite: ${soUrl}`;
+            // Create message for notification
+            const staffMessage = `🔄 Sales Order #${orderId} อัปเดตเรียบร้อยแล้ว\n` +
+                             `📝 การเปลี่ยนแปลง: ${Object.keys(headerChanges).length} รายการในส่วนหัว, ${itemsUpdated.length} รายการในสินค้า\n` +
+                             `🔗 ดูใน NetSuite: ${soUrl}`;
             
-            await sendTelegramNotification(telegramId, message);
+            await sendTelegramMessage(telegramId, staffMessage);
             logs.push(`✅ ส่งการแจ้งเตือนไปยัง Telegram ของพนักงานแล้ว (${staffCode})`);
+          }
+          
+          // 2. Get users in the ประสานงานขาย department and notify them
+          const [coordUsers] = await conn.execute(
+            "SELECT telegram_id FROM users WHERE department = 'ประสานงานขาย' AND registration_complete = 1"
+          );
+          
+          if (coordUsers.length > 0) {
+            const coordMessage = `🔄 มีการแก้ไข Sales Order: ${soSubject}\n` +
+                               `📝 เลขที่ SO: ${soNo}\n` +
+                               `💼 การเปลี่ยนแปลง: ${Object.keys(headerChanges).length} รายการในส่วนหัว, ${itemsUpdated.length} รายการในสินค้า\n` +
+                               `🔗 ดูใน NetSuite: ${soUrl}`;
+            
+            for (const user of coordUsers) {
+              await sendTelegramMessage(user.telegram_id, coordMessage);
+            }
+            
+            logs.push(`✅ ส่งการแจ้งเตือนไปยังแผนกประสานงานขายแล้ว (${coordUsers.length} คน)`);
           }
         }
         await conn.end();
       } catch (error) {
-        console.error('Error sending staff notification:', error);
-        logs.push('❌ เกิดข้อผิดพลาดในการส่งการแจ้งเตือนไปยังพนักงาน');
+        console.error('Error sending notifications:', error);
+        logs.push('❌ เกิดข้อผิดพลาดในการส่งการแจ้งเตือน');
       }
     }
     
@@ -595,379 +495,364 @@ app.post('/api/order/:id/update', async (req, res) => {
   }
 });
 
-// Authentication endpoint
-app.post('/api/auth/telegram', async (req, res) => {
+// Add helper function to send Telegram messages
+async function sendTelegramMessage(chatId, message) {
+  const botToken = config.telegram.bot_token;
+  const telegramApiUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
+  
   try {
-    const telegramUser = req.body;
+    await axios.post(telegramApiUrl, {
+      chat_id: chatId,
+      text: message,
+      parse_mode: 'HTML'
+    });
+    return true;
+  } catch (error) {
+    console.error('Error sending Telegram message:', error);
+    return false;
+  }
+}
+
+// Helper Functions
+async function getVenioSONumber(netsuiteId) {
+  try {
+    const conn = await getDbConnection();
+    const [rows] = await conn.execute(
+      'SELECT salesOrderNo FROM sid_v_so WHERE netsuite_id = ? LIMIT 1',
+      [netsuiteId]
+    );
+    await conn.end();
     
-    // Verify Telegram data (uncomment in production)
-    // const isValid = verifyTelegramData(telegramUser, config.telegram.bot_token);
-    // if (!isValid) {
-    //   return res.status(400).json({ success: false, message: 'Invalid Telegram data' });
-    // }
-    
-    if (!telegramUser.id || !telegramUser.first_name) {
-      return res.status(400).json({ success: false, message: 'Invalid Telegram data' });
-    }
-    
+    return rows.length > 0 ? rows[0].salesOrderNo : null;
+  } catch (error) {
+    console.error('Error fetching Venio SO:', error);
+    return null;
+  }
+}
+
+async function getCustomerInfo(customerId) {
+  try {
     const conn = await getDbConnection();
     
-    // Check if user exists
-    const [userRows] = await conn.execute(
-      'SELECT * FROM users WHERE telegram_id = ?',
-      [telegramUser.id]
+    // Get customer name
+    const [nameRows] = await conn.execute(
+      'SELECT DISTINCT name FROM erp_shipto WHERE internal_id = ?',
+      [customerId]
     );
     
-    let user;
-    
-    if (userRows.length === 0) {
-      // New user - create account
-      const [result] = await conn.execute(
-        'INSERT INTO users (telegram_id, first_name, last_name, username, photo_url, auth_date, registration_complete) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [
-          telegramUser.id,
-          telegramUser.first_name,
-          telegramUser.last_name || '',
-          telegramUser.username || '',
-          telegramUser.photo_url || '',
-          telegramUser.auth_date || Math.floor(Date.now() / 1000),
-          false  // New users need to complete registration
-        ]
-      );
-      
-      const [newUser] = await conn.execute('SELECT * FROM users WHERE id = ?', [result.insertId]);
-      user = newUser[0];
-    } else {
-      // Existing user - update info
-      user = userRows[0];
-      
-      await conn.execute(
-        'UPDATE users SET first_name = ?, last_name = ?, username = ?, photo_url = ?, auth_date = ? WHERE telegram_id = ?',
-        [
-          telegramUser.first_name,
-          telegramUser.last_name || '',
-          telegramUser.username || '',
-          telegramUser.photo_url || '',
-          telegramUser.auth_date || Math.floor(Date.now() / 1000),
-          telegramUser.id
-        ]
-      );
-    }
-    
-    // Check if user has a staffCode mapping
-    const [staffRows] = await conn.execute(
-      'SELECT * FROM staff_telegram_mapping WHERE telegram_id = ?',
-      [telegramUser.id]
+    // Get shipping addresses
+    const [addressRows] = await conn.execute(
+      'SELECT address_internal_id, shipping_address FROM erp_shipto WHERE internal_id = ?',
+      [customerId]
     );
     
-    const userResponse = {
-      id: user.id,
-      telegram_id: user.telegram_id,
-      first_name: user.first_name,
-      last_name: user.last_name,
-      username: user.username,
-      photo_url: user.photo_url,
-      email: user.email,
-      employee_id: user.employee_id,
-      staff_code: staffRows.length > 0 ? staffRows[0].staff_code : null,
-      registration_complete: user.registration_complete === 1
+    await conn.end();
+    
+    return {
+      customerName: nameRows.length > 0 ? nameRows[0].name : '',
+      shippingAddresses: addressRows
     };
-    
-    await conn.end();
-    
-    res.json({
-      success: true,
-      user: userResponse
-    });
   } catch (error) {
-    console.error('Error in Telegram authentication:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Authentication failed'
-    });
+    console.error('Error fetching customer info:', error);
+    return { customerName: '', shippingAddresses: [] };
   }
-});
+}
 
-// Associate staffCode with Telegram user
-app.post('/api/user/link-staff', async (req, res) => {
+async function getConditions(conn) {
   try {
-    const { telegram_id, staff_code } = req.body;
+    const [rows] = await conn.execute('SELECT * FROM billing_conditions ORDER BY condition_group, id');
     
-    if (!telegram_id || !staff_code) {
-      return res.status(400).json({ success: false, message: 'Missing telegram_id or staff_code' });
+    // Group by condition_group
+    const conditions = {};
+    for (const row of rows) {
+      if (!conditions[row.condition_group]) {
+        conditions[row.condition_group] = [];
+      }
+      conditions[row.condition_group].push(row);
     }
     
-    const conn = await getDbConnection();
-    
-    // Check if mapping already exists
-    const [existingRows] = await conn.execute(
-      'SELECT * FROM staff_telegram_mapping WHERE telegram_id = ?',
-      [telegram_id]
-    );
-    
-    if (existingRows.length > 0) {
-      // Update existing mapping
-      await conn.execute(
-        'UPDATE staff_telegram_mapping SET staff_code = ? WHERE telegram_id = ?',
-        [staff_code, telegram_id]
-      );
-    } else {
-      // Create new mapping
-      await conn.execute(
-        'INSERT INTO staff_telegram_mapping (telegram_id, staff_code) VALUES (?, ?)',
-        [telegram_id, staff_code]
-      );
-    }
-    
-    await conn.end();
-    
-    res.json({
-      success: true,
-      message: 'Staff code linked successfully'
-    });
+    return conditions;
   } catch (error) {
-    console.error('Error linking staff code:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to link staff code'
-    });
+    console.error('Error fetching conditions:', error);
+    return {};
   }
-});
+}
 
-// Get orders associated with a staff member
-app.get('/api/orders/staff/:staffCode', async (req, res) => {
+async function getItemMap(conn) {
   try {
-    const { staffCode } = req.params;
+    const [rows] = await conn.execute('SELECT Internal_ID, Item FROM erp_price');
     
-    const conn = await getDbConnection();
+    const itemMap = {};
+    for (const row of rows) {
+      itemMap[row.Internal_ID] = row.Item;
+    }
     
-    // Get orders for this staff code
-    const [orders] = await conn.execute(
-      'SELECT * FROM sid_v_so WHERE staffCode = ? ORDER BY salesOrderDate DESC LIMIT 20',
-      [staffCode]
-    );
-    
-    await conn.end();
-    
-    res.json({
-      success: true,
-      orders
-    });
+    return itemMap;
   } catch (error) {
-    console.error('Error fetching staff orders:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch orders'
-    });
+    console.error('Error fetching item map:', error);
+    return {};
   }
-});
+}
 
-// Add these routes to your server.js
-
-// Complete registration endpoint
-app.post('/api/auth/complete-registration', async (req, res) => {
+async function getLocations(conn) {
   try {
-    const userData = req.body;
+    const [rows] = await conn.execute('SELECT Internal_ID, Name FROM erp_location');
     
-    if (!userData.telegram_id) {
-      return res.status(400).json({ success: false, message: 'Invalid user data' });
+    const locations = {};
+    for (const row of rows) {
+      locations[row.Internal_ID] = row.Name;
     }
     
-    if (!userData.email || !userData.employee_id) {
-      return res.status(400).json({ success: false, message: 'Email and Employee ID are required' });
-    }
+    return locations;
+  } catch (error) {
+    console.error('Error fetching locations:', error);
+    return {};
+  }
+}
+
+// OAuth header builder (similar to build_oauth_header in PHP)
+const buildOAuthHeader = (url, method, consumer_key, consumer_secret, token, token_secret, realm) => {
+  const timestamp = Math.floor(Date.now() / 1000);
+  const nonce = crypto.randomBytes(16).toString('hex');
+  
+  const oauthParams = {
+    oauth_consumer_key: consumer_key,
+    oauth_token: token,
+    oauth_signature_method: 'HMAC-SHA256',
+    oauth_timestamp: timestamp,
+    oauth_nonce: nonce,
+    oauth_version: '1.0'
+  };
+  
+  // Sort params
+  const sortedParams = Object.keys(oauthParams).sort().reduce((acc, key) => {
+    acc[key] = oauthParams[key];
+    return acc;
+  }, {});
+  
+  // Create base string params
+  const baseParams = [];
+  for (const [key, value] of Object.entries(sortedParams)) {
+    baseParams.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
+  }
+  
+  // Create base string
+  const baseString = `${method.toUpperCase()}&${encodeURIComponent(url)}&${encodeURIComponent(baseParams.join('&'))}`;
+  
+  // Create signing key
+  const signingKey = `${encodeURIComponent(consumer_secret)}&${encodeURIComponent(token_secret)}`;
+  
+  // Create signature
+  const signature = crypto.createHmac('sha256', signingKey).update(baseString).digest('base64');
+  oauthParams.oauth_signature = signature;
+  
+  // Create header
+  let header = `OAuth realm="${realm}", `;
+  for (const [key, value] of Object.entries(oauthParams)) {
+    header += `${encodeURIComponent(key)}="${encodeURIComponent(value)}", `;
+  }
+  
+  return header.slice(0, -2); // Remove trailing comma and space
+};
+
+// Fetch order from NetSuite
+async function fetchSalesOrder(orderId) {
+  const soUrl = `${config.base_url}/salesOrder/${orderId}`;
+  const authHeader = buildOAuthHeader(
+    soUrl, 
+    'GET', 
+    config.consumer_key, 
+    config.consumer_secret, 
+    config.token, 
+    config.token_secret, 
+    config.realm
+  );
+  
+  try {
+    const response = await axios.get(soUrl, {
+      headers: {
+        'Authorization': authHeader
+      }
+    });
     
-    // Validate email format
-    const emailRegex = /\S+@\S+\.\S+/;
-    if (!emailRegex.test(userData.email)) {
-      return res.status(400).json({ success: false, message: 'Invalid email format' });
-    }
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching sales order:', error);
+    throw error;
+  }
+}
+
+// Fetch order items from NetSuite
+async function fetchOrderItems(orderId) {
+  const itemUrl = `${config.base_url}/salesOrder/${orderId}/item`;
+  const authHeader = buildOAuthHeader(
+    itemUrl, 
+    'GET', 
+    config.consumer_key, 
+    config.consumer_secret, 
+    config.token, 
+    config.token_secret, 
+    config.realm
+  );
+  
+  try {
+    const response = await axios.get(itemUrl, {
+      headers: {
+        'Authorization': authHeader
+      }
+    });
     
-    const conn = await getDbConnection();
+    const items = [];
     
-    // Check if user exists
-    const [userRows] = await conn.execute(
-      'SELECT * FROM users WHERE telegram_id = ?',
-      [userData.telegram_id]
-    );
-    
-    if (userRows.length === 0) {
-      await conn.end();
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-    
-    // Update user with email, employee ID and mark registration as complete
-    await conn.execute(
-      'UPDATE users SET email = ?, employee_id = ?, registration_complete = TRUE WHERE telegram_id = ?',
-      [userData.email, userData.employee_id, userData.telegram_id]
-    );
-    
-    // Check if we can map this employee ID to a staff code
-    try {
-      // Check if the employee_id exists in the erp_emp table
-      const [staffRows] = await conn.execute(
-        'SELECT ID FROM erp_emp WHERE ID = ?',
-        [userData.employee_id]
-      );
-      
-      // If the employee exists in the erp_emp table
-      if (staffRows.length > 0) {
-        // Check if there's already a mapping
-        const [mappingRows] = await conn.execute(
-          'SELECT * FROM staff_telegram_mapping WHERE telegram_id = ?',
-          [userData.telegram_id]
+    // Fetch each line item
+    for (const entry of response.data.items || []) {
+      const href = entry.links[0]?.href;
+      if (href) {
+        const lineAuthHeader = buildOAuthHeader(
+          href, 
+          'GET', 
+          config.consumer_key, 
+          config.consumer_secret, 
+          config.token, 
+          config.token_secret, 
+          config.realm
         );
         
-        if (mappingRows.length === 0) {
-          // Create a new mapping
-          await conn.execute(
-            'INSERT INTO staff_telegram_mapping (telegram_id, staff_code) VALUES (?, ?)',
-            [userData.telegram_id, userData.employee_id]
-          );
-        } else {
-          // Update existing mapping
-          await conn.execute(
-            'UPDATE staff_telegram_mapping SET staff_code = ? WHERE telegram_id = ?',
-            [userData.employee_id, userData.telegram_id]
-          );
+        const lineResponse = await axios.get(href, {
+          headers: {
+            'Authorization': lineAuthHeader
+          }
+        });
+        
+        const item = lineResponse.data;
+        if (item) {
+          item.href = href;
+          items.push(item);
         }
       }
-    } catch (error) {
-      console.error('Error creating staff mapping:', error);
-      // Continue even if mapping fails - we have the essential registration data
     }
     
-    // Get the updated user data
-    const [updatedRows] = await conn.execute(
-      'SELECT u.*, stm.staff_code FROM users u LEFT JOIN staff_telegram_mapping stm ON u.telegram_id = stm.telegram_id WHERE u.telegram_id = ?',
-      [userData.telegram_id]
-    );
+    return items;
+  } catch (error) {
+    console.error('Error fetching order items:', error);
+    throw error;
+  }
+}
+
+// Update sales order in NetSuite
+async function updateSalesOrder(orderId, headerChanges) {
+  const orderUrl = `${config.base_url}/salesOrder/${orderId}`;
+  const authHeader = buildOAuthHeader(
+    orderUrl, 
+    'PATCH', 
+    config.consumer_key, 
+    config.consumer_secret, 
+    config.token, 
+    config.token_secret, 
+    config.realm
+  );
+  
+  try {
+    const response = await axios.patch(orderUrl, headerChanges, {
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json'
+      }
+    });
     
-    await conn.end();
+    return {
+      success: true,
+      status: response.status,
+      data: response.data
+    };
+  } catch (error) {
+    console.error('Error updating sales order:', error);
+    return {
+      success: false,
+      status: error.response?.status || 500,
+      message: error.message
+    };
+  }
+}
+
+// Update sales order item in NetSuite
+async function updateOrderItem(itemHref, changes) {
+  const authHeader = buildOAuthHeader(
+    itemHref, 
+    'PATCH', 
+    config.consumer_key, 
+    config.consumer_secret, 
+    config.token, 
+    config.token_secret, 
+    config.realm
+  );
+  
+  try {
+    const response = await axios.patch(itemHref, changes, {
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json'
+      }
+    });
     
-    if (updatedRows.length === 0) {
-      return res.status(404).json({ success: false, message: 'User not found after update' });
-    }
-    
-    const user = updatedRows[0];
-    
-    const userResponse = {
-      id: user.id,
-      telegram_id: user.telegram_id,
-      first_name: user.first_name,
-      last_name: user.last_name,
-      username: user.username,
-      photo_url: user.photo_url,
-      email: user.email,
-      employee_id: user.employee_id,
-      staff_code: user.staff_code,
-      registration_complete: user.registration_complete === 1
+    return {
+      success: true,
+      status: response.status,
+      data: response.data
+    };
+  } catch (error) {
+    console.error('Error updating order item:', error);
+    return {
+      success: false,
+      status: error.response?.status || 500,
+      message: error.message
+    };
+  }
+}
+
+// Send notification via Telegram
+async function sendTelegramNotification(chatId, message) {
+  try {
+    const telegramData = {
+      chat_id: chatId,
+      message: message
     };
     
-    res.json({
-      success: true,
-      user: userResponse
+    await axios.post(config.telegram.notification_url, telegramData, {
+      headers: {
+        'Content-Type': 'application/json'
+      }
     });
+    
+    return true;
   } catch (error) {
-    console.error('Error in registration:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Registration failed'
-    });
+    console.error('Error sending Telegram notification:', error);
+    return false;
   }
-});
+}
+// In server.js - Add this route
 
-// Update the existing Telegram authentication endpoint
-app.post('/api/auth/telegram', async (req, res) => {
+// Get departments for dropdown
+app.get('/api/departments', async (req, res) => {
   try {
-    const telegramUser = req.body;
-    
-    // Verify Telegram data (commented out for development)
-    // const isValid = verifyTelegramData(telegramUser, config.telegram.bot_token);
-    // if (!isValid) {
-    //   return res.status(400).json({ success: false, message: 'Invalid Telegram data' });
-    // }
-    
-    if (!telegramUser.id || !telegramUser.first_name) {
-      return res.status(400).json({ success: false, message: 'Invalid Telegram data' });
-    }
-    
     const conn = await getDbConnection();
     
-    // Check if user exists
-    const [userRows] = await conn.execute(
-      'SELECT * FROM users WHERE telegram_id = ?',
-      [telegramUser.id]
+    // Get departments from erp_deep table
+    const [departments] = await conn.execute(
+      'SELECT Name_no_hierarchy FROM erp_deep ORDER BY Name_no_hierarchy'
     );
-    
-    let user;
-    let isNewUser = false;
-    
-    if (userRows.length === 0) {
-      // New user - create account
-      const [result] = await conn.execute(
-        'INSERT INTO users (telegram_id, first_name, last_name, username, photo_url, auth_date, registration_complete) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [
-          telegramUser.id,
-          telegramUser.first_name,
-          telegramUser.last_name || '',
-          telegramUser.username || '',
-          telegramUser.photo_url || '',
-          telegramUser.auth_date || Math.floor(Date.now() / 1000),
-          false  // Registration incomplete for new users
-        ]
-      );
-      
-      const [newUser] = await conn.execute('SELECT * FROM users WHERE id = ?', [result.insertId]);
-      user = newUser[0];
-      isNewUser = true;
-    } else {
-      // Existing user - update info
-      user = userRows[0];
-      
-      await conn.execute(
-        'UPDATE users SET first_name = ?, last_name = ?, username = ?, photo_url = ?, auth_date = ? WHERE telegram_id = ?',
-        [
-          telegramUser.first_name,
-          telegramUser.last_name || '',
-          telegramUser.username || '',
-          telegramUser.photo_url || '',
-          telegramUser.auth_date || Math.floor(Date.now() / 1000),
-          telegramUser.id
-        ]
-      );
-    }
-    
-    // Check if user has a staffCode mapping
-    const [staffRows] = await conn.execute(
-      'SELECT * FROM staff_telegram_mapping WHERE telegram_id = ?',
-      [telegramUser.id]
-    );
-    
-    const userResponse = {
-      id: user.id,
-      telegram_id: user.telegram_id,
-      first_name: user.first_name,
-      last_name: user.last_name,
-      username: user.username,
-      photo_url: user.photo_url,
-      email: user.email,
-      employee_id: user.employee_id,
-      staff_code: staffRows.length > 0 ? staffRows[0].staff_code : null,
-      registration_complete: isNewUser ? false : (user.registration_complete === 1)
-    };
     
     await conn.end();
     
     res.json({
       success: true,
-      user: userResponse
+      departments
     });
   } catch (error) {
-    console.error('Error in Telegram authentication:', error);
+    console.error('Error fetching departments:', error);
     res.status(500).json({
       success: false,
-      message: 'Authentication failed'
+      message: 'Failed to fetch departments'
     });
   }
 });
