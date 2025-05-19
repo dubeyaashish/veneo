@@ -25,6 +25,9 @@ const EditOrder = () => {
     custbody_ar_req_inv_mac5: '',
     shipaddresslist: '',
     custbodyar_so_memo2: '',
+    custbody_ar_all_memo: '',
+    custbody_ar_so_statusbill: '',
+    custbody_ar_estimate_contrat1: '',
     items: []
   });
   const [logs, setLogs] = useState([]);
@@ -32,10 +35,7 @@ const EditOrder = () => {
   const [showLogsModal, setShowLogsModal] = useState(false);
   const [collapseStates, setCollapseStates] = useState({});
   const [isMyOrder, setIsMyOrder] = useState(false);
-
-  // NEW: Items View Mode (card/table)
   const [itemsViewMode, setItemsViewMode] = useState('card');
-  // Collapse/Expand all in card mode
   const [allCollapsed, setAllCollapsed] = useState(false);
 
   useEffect(() => {
@@ -47,7 +47,6 @@ const EditOrder = () => {
 
         const so = response.data.so;
 
-        // Check if this order belongs to the current user (by staff code)
         if (currentUser?.staff_code) {
           try {
             const conn = await axios.get(`${API_URL}/orders/staff/${currentUser.staff_code}`);
@@ -67,13 +66,18 @@ const EditOrder = () => {
           custbody_ar_req_inv_mac5: so.custbody_ar_req_inv_mac5 || '',
           shipaddresslist: so.shipaddresslist || '',
           custbodyar_so_memo2: so.custbodyar_so_memo2 || '',
+          custbody_ar_all_memo: so.custbody_ar_all_memo || '',
+          custbody_ar_so_statusbill: so.custbody_ar_so_statusbill || '',
+          custbody_ar_estimate_contrat1: so.custbody_ar_estimate_contrat1 || '',
           items: response.data.items.map(item => ({
             href: item.href,
             item_id: item.item?.id || '',
             quantity: item.quantity || '',
             rate: item.rate || '',
             description: item.description || '',
-            location: item.inventorylocation?.id || ''
+            location: item.inventorylocation?.id || '',
+            custcol_ice_ld_discount: item.custcol_ice_ld_discount || '',
+            inpt_units_11: item.inpt_units_11 || ''
           }))
         };
 
@@ -118,7 +122,6 @@ const EditOrder = () => {
     });
   };
 
-  // Card collapse toggle per row
   const toggleCollapse = (index) => {
     setCollapseStates(prev => ({
       ...prev,
@@ -126,7 +129,6 @@ const EditOrder = () => {
     }));
   };
 
-  // Collapse/Expand all for cards
   const handleCollapseAll = (collapse = true) => {
     const newStates = {};
     formData.items.forEach((item, i) => {
@@ -138,6 +140,7 @@ const EditOrder = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    console.log(formData);
 
     try {
       setProcessing(true);
@@ -245,6 +248,7 @@ const EditOrder = () => {
               </div>
               <div className="card-body">
                 <div className="row">
+                  {/* Existing fields */}
                   <div className="col-md-6 mb-3">
                     <label className="form-label">Memo:</label>
                     <div className="input-group">
@@ -259,7 +263,7 @@ const EditOrder = () => {
                     </div>
                   </div>
                   <div className="col-md-6 mb-3">
-                    <label className="form-label">Reference #:</label>
+                    <label className="form-label">PO #:</label>
                     <div className="input-group">
                       <span className="input-group-text"><i className="bi bi-hash"></i></span>
                       <input
@@ -361,6 +365,48 @@ const EditOrder = () => {
                       />
                     </div>
                   </div>
+
+                  {/* ---- Additional Header Fields ---- */}
+                  <div className="col-md-6 mb-3">
+                    <label className="form-label">MEMO (แสดงบน From):</label>
+                    <div className="input-group">
+                      <span className="input-group-text"><i className="bi bi-card-text"></i></span>
+                      <input
+                        type="text"
+                        className="form-control"
+                        name="custbody_ar_all_memo"
+                        value={formData.custbody_ar_all_memo}
+                        onChange={handleInputChange}
+                      />
+                    </div>
+                  </div>
+                  <div className="col-md-6 mb-3">
+                    <label className="form-label">SO Status Bill:</label>
+                    <div className="input-group">
+                      <span className="input-group-text"><i className="bi bi-info-circle"></i></span>
+                      <input
+                        type="text"
+                        className="form-control"
+                        name="custbody_ar_so_statusbill"
+                        value={formData.custbody_ar_so_statusbill}
+                        onChange={handleInputChange}
+                      />
+                    </div>
+                  </div>
+                  <div className="col-md-6 mb-3">
+                    <label className="form-label">ผู้ติดต่อ:</label>
+                    <div className="input-group">
+                      <span className="input-group-text"><i className="bi bi-clipboard-data"></i></span>
+                      <input
+                        type="text"
+                        className="form-control"
+                        name="custbody_ar_estimate_contrat1"
+                        value={formData.custbody_ar_estimate_contrat1}
+                        onChange={handleInputChange}
+                      />
+                    </div>
+                  </div>
+                  {/* ---- End Additional Header Fields ---- */}
                 </div>
               </div>
             </div>
@@ -377,10 +423,8 @@ const EditOrder = () => {
                 </div>
                 <span className="badge bg-white text-primary ms-2">{formData.items.length} รายการ</span>
               </div>
-              {/* Toggle and Collapse buttons */}
               <div className="card-body pb-0">
                 <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap">
-                  {/* View Toggle */}
                   <div>
                     <div className="btn-group me-2 mb-2 mb-md-0" role="group" aria-label="View Toggle">
                       <button
@@ -399,7 +443,6 @@ const EditOrder = () => {
                       </button>
                     </div>
                   </div>
-                  {/* Collapse/Expand All in Card Mode */}
                   {itemsViewMode === 'card' && (
                     <div>
                       <button
@@ -451,7 +494,7 @@ const EditOrder = () => {
                           {!collapseStates[i] && (
                             <div className="card-body bg-white">
                               <div className="row g-3">
-                                <div className="col-md-4">
+                                <div className="col-md-3">
                                   <label className="form-label">Item:</label>
                                   <input
                                     type="text"
@@ -466,7 +509,7 @@ const EditOrder = () => {
                                     type="text"
                                     className="form-control"
                                     value={item.quantity}
-                                    onChange={(e) => handleItemChange(i, 'quantity', e.target.value)}
+                                    onChange={e => handleItemChange(i, 'quantity', e.target.value)}
                                   />
                                 </div>
                                 <div className="col-md-2">
@@ -475,16 +518,16 @@ const EditOrder = () => {
                                     type="text"
                                     className="form-control"
                                     value={item.rate}
-                                    onChange={(e) => handleItemChange(i, 'rate', e.target.value)}
+                                    onChange={e => handleItemChange(i, 'rate', e.target.value)}
                                   />
                                 </div>
-                                <div className="col-md-2">
+                                <div className="col-md-3">
                                   <label className="form-label">Description:</label>
                                   <input
                                     type="text"
                                     className="form-control"
                                     value={item.description}
-                                    onChange={(e) => handleItemChange(i, 'description', e.target.value)}
+                                    onChange={e => handleItemChange(i, 'description', e.target.value)}
                                   />
                                 </div>
                                 <div className="col-md-2">
@@ -492,7 +535,7 @@ const EditOrder = () => {
                                   <select
                                     className="form-control"
                                     value={item.location}
-                                    onChange={(e) => handleItemChange(i, 'location', e.target.value)}
+                                    onChange={e => handleItemChange(i, 'location', e.target.value)}
                                   >
                                     <option value="">เลือกสถานที่</option>
                                     {Object.entries(locations).map(([id, name]) => (
@@ -500,6 +543,26 @@ const EditOrder = () => {
                                     ))}
                                   </select>
                                 </div>
+                                {/* ---- Additional Item Fields ---- */}
+                                <div className="col-md-4">
+                                  <label className="form-label">Discount (formatted):</label>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={item.custcol_ice_ld_discount}
+                                    onChange={e => handleItemChange(i, 'custcol_ice_ld_discount', e.target.value)}
+                                  />
+                                </div>
+                                <div className="col-md-4">
+                                  <label className="form-label">Units 11:</label>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={item.inpt_units_11}
+                                    onChange={e => handleItemChange(i, 'inpt_units_11', e.target.value)}
+                                  />
+                                </div>
+                                {/* ---- End Additional Item Fields ---- */}
                               </div>
                             </div>
                           )}
@@ -518,12 +581,14 @@ const EditOrder = () => {
                           <th>Rate</th>
                           <th>Description</th>
                           <th>Location</th>
+                          <th>Discount (formatted)</th>
+                          <th>Units 11</th>
                         </tr>
                       </thead>
                       <tbody>
                         {formData.items.length === 0 ? (
                           <tr>
-                            <td colSpan={6} className="text-center text-muted">ไม่มีรายการสินค้า</td>
+                            <td colSpan={8} className="text-center text-muted">ไม่มีรายการสินค้า</td>
                           </tr>
                         ) : (
                           formData.items.map((item, i) => {
@@ -574,6 +639,22 @@ const EditOrder = () => {
                                       <option key={id} value={id}>{name}</option>
                                     ))}
                                   </select>
+                                </td>
+                                <td>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={item.custcol_ice_ld_discount}
+                                    onChange={e => handleItemChange(i, 'custcol_ice_ld_discount', e.target.value)}
+                                  />
+                                </td>
+                                <td>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={item.inpt_units_11}
+                                    onChange={e => handleItemChange(i, 'inpt_units_11', e.target.value)}
+                                  />
                                 </td>
                               </tr>
                             );

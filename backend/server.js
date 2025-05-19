@@ -308,6 +308,9 @@ app.post('/api/order/:id/update', async (req, res) => {
       custbody_ar_req_inv_mac5, 
       shipaddresslist, 
       custbodyar_so_memo2,
+      custbody_ar_all_memo,
+      custbody_ar_so_statusbill,
+      custbody_ar_estimate_contrat1,
       items 
     } = req.body;
     
@@ -344,6 +347,16 @@ app.post('/api/order/:id/update', async (req, res) => {
     if (String(currentSO.custbodyar_so_memo2 || '').trim() !== String(custbodyar_so_memo2 || '').trim()) {
       headerChanges.custbodyar_so_memo2 = custbodyar_so_memo2;
     }
+    if (String(currentSO.custbody_ar_all_memo || '').trim() !== String(custbody_ar_all_memo || '').trim()) {
+      headerChanges.custbody_ar_all_memo = custbody_ar_all_memo;
+    }
+    if (String(currentSO.custbody_ar_so_statusbill || '').trim() !== String(custbody_ar_so_statusbill || '').trim()) {
+       headerChanges.custbody_ar_so_statusbill = custbody_ar_so_statusbill;
+    }
+    if (String(currentSO.custbody_ar_estimate_contrat1 || '').trim() !== String(custbody_ar_estimate_contrat1 || '').trim()) {
+        headerChanges.custbody_ar_estimate_contrat1 = custbody_ar_estimate_contrat1;
+    }
+
     
     const logs = [];
     
@@ -408,6 +421,13 @@ app.post('/api/order/:id/update', async (req, res) => {
         if (Number(originalItem.inventorylocation?.id || 0) !== Number(item.location)) {
           changes.inventorylocation = { id: Number(item.location) };
         }
+        if (Number(originalItem.custcol_ice_ld_discount) !== Number(item.custcol_ice_ld_discount)) {
+        changes.custcol_ice_ld_discount = Number(item.custcol_ice_ld_discount);
+        }
+        if (String(originalItem.inpt_units_11 || '').trim() !== String(item.inpt_units_11 || '').trim()) {
+        changes.inpt_units_11 = item.inpt_units_11;
+        }
+
         
         // Update item if there are changes
         if (Object.keys(changes).length > 0) {
