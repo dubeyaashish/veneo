@@ -138,25 +138,44 @@ const EditOrder = () => {
     setAllCollapsed(collapse);
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    console.log(formData);
+// In EditOrder.js - update handleSubmit function
 
-    try {
-      setProcessing(true);
-      const response = await axios.post(`${API_URL}/order/${id}/update`, formData);
+const handleSubmit = async (e) => {
+  e.preventDefault();
+  console.log(formData);
 
-      setLogs(response.data.logs);
-      setShowLogsModal(true);
+  try {
+    setProcessing(true);
+    const response = await axios.post(`${API_URL}/order/${id}/update`, formData);
 
-      toast.success('Sales Order updated successfully');
-      setProcessing(false);
-    } catch (err) {
-      console.error('Error updating order:', err);
-      toast.error('Failed to update Sales Order');
-      setProcessing(false);
+    setLogs(response.data.logs);
+    
+    // Check if any notifications were sent
+    const notificationSent = response.data.logs.some(log => 
+      log.includes('ส่งการแจ้งเตือน')
+    );
+    
+    // Show more detailed toast based on what happened
+    if (response.data.headerUpdated || response.data.itemsUpdated.length > 0) {
+      if (notificationSent) {
+        toast.success('Sales Order updated successfully. Notifications sent to coordination team!', {
+          autoClose: 5000 // Show for longer
+        });
+      } else {
+        toast.success('Sales Order updated successfully!');
+      }
+    } else {
+      toast.info('No changes were detected in the sales order.');
     }
-  };
+    
+    setShowLogsModal(true);
+    setProcessing(false);
+  } catch (err) {
+    console.error('Error updating order:', err);
+    toast.error('Failed to update Sales Order: ' + (err.response?.data?.message || err.message));
+    setProcessing(false);
+  }
+};
 
   const handleRemarkSave = (remarkText) => {
     setFormData({

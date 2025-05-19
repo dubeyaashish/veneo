@@ -296,6 +296,9 @@ app.get('/api/order/:id', async (req, res) => {
 // Update order
 // In server.js - Modify the existing POST route for updating orders
 
+// Replace your entire update order route with this corrected version
+// Make sure the sendTelegramMessage function is OUTSIDE of this route handler
+
 // Update order
 app.post('/api/order/:id/update', async (req, res) => {
   try {
@@ -447,55 +450,43 @@ app.post('/api/order/:id/update', async (req, res) => {
     // Check if order has been modified and send notifications
     if (Object.keys(headerChanges).length > 0 || itemsUpdated.length > 0) {
       try {
-        // Get the staff code associated with this order
+        // Get the order details
         const conn = await getDbConnection();
-        const [orderRows] = await conn.execute(
-          'SELECT so.staffCode, so.salesOrderNo, so.salesOrderSubject FROM sid_v_so so WHERE netsuite_id = ?',
-          [orderId]
-        );
-        
-        if (orderRows.length > 0) {
-          const staffCode = orderRows[0].staffCode;
-          const soNo = orderRows[0].salesOrderNo;
-          const soSubject = orderRows[0].salesOrderSubject;
-          const soUrl = `${config.accounting_url}${orderId}`;
-          
-          // 1. Send notification to the staff member responsible for the order
-          const [mappingRows] = await conn.execute(
-            'SELECT telegram_id FROM staff_telegram_mapping WHERE staff_code = ?',
-            [staffCode]
-          );
-          
-          if (mappingRows.length > 0) {
-            const telegramId = mappingRows[0].telegram_id;
-            
-            // Create message for notification
-            const staffMessage = `🔄 Sales Order #${orderId} อัปเดตเรียบร้อยแล้ว\n` +
-                             `📝 การเปลี่ยนแปลง: ${Object.keys(headerChanges).length} รายการในส่วนหัว, ${itemsUpdated.length} รายการในสินค้า\n` +
-                             `🔗 ดูใน NetSuite: ${soUrl}`;
-            
-            await sendTelegramMessage(telegramId, staffMessage);
-            logs.push(`✅ ส่งการแจ้งเตือนไปยัง Telegram ของพนักงานแล้ว (${staffCode})`);
-          }
-          
-          // 2. Get users in the ประสานงานขาย department and notify them
+        // Always send notification, don't require DB query
+        const soNo = orderId;  // Or use a string like "Sales Order #" + orderId
+        const soUrl = `${config.accounting_url}${orderId}`;
+        const soSubject = ""; // or "Sales Order updated" (if you want)
+
+        // Notify coordination department users
+        try {
           const [coordUsers] = await conn.execute(
-            "SELECT telegram_id FROM users WHERE department = 'ประสานงานขาย' AND registration_complete = 1"
+            "SELECT telegram_id FROM users WHERE department = 'M180101 แผนกประสานงานขาย' AND registration_complete = 1"
           );
-          
+
           if (coordUsers.length > 0) {
-            const coordMessage = `🔄 มีการแก้ไข Sales Order: ${soSubject}\n` +
-                               `📝 เลขที่ SO: ${soNo}\n` +
-                               `💼 การเปลี่ยนแปลง: ${Object.keys(headerChanges).length} รายการในส่วนหัว, ${itemsUpdated.length} รายการในสินค้า\n` +
-                               `🔗 ดูใน NetSuite: ${soUrl}`;
-            
+            const coordMessage =
+              `✅ แก้ไข SaleOrder สมบูรณ์ ดำเนินการต่อได้\n` +
+              `📄 เลขที่ SO: ${soNo}\n` +
+              (soSubject ? `📋 รายละเอียด: ${soSubject}\n` : "") +
+              `🔗 ลิงก์: ${soUrl}`;
+
+            let successCount = 0;
             for (const user of coordUsers) {
-              await sendTelegramMessage(user.telegram_id, coordMessage);
+              if (user.telegram_id) {
+                const coordResult = await sendTelegramMessage(user.telegram_id, coordMessage);
+                if (coordResult) successCount++;
+              }
             }
-            
-            logs.push(`✅ ส่งการแจ้งเตือนไปยังแผนกประสานงานขายแล้ว (${coordUsers.length} คน)`);
+
+            if (successCount > 0) {
+              logs.push(`✅ ส่งการแจ้งเตือนไปยังแผนกประสานงานขายแล้ว (${successCount} คน)`);
+            }
           }
+        } catch (err) {
+          console.error("Error notifying coordination department:", err);
+          logs.push('❌ Error notifying coordination department');
         }
+
         await conn.end();
       } catch (error) {
         console.error('Error sending notifications:', error);
@@ -515,20 +506,36 @@ app.post('/api/order/:id/update', async (req, res) => {
   }
 });
 
+
+// Add this function OUTSIDE of all route handlers, at the top-level scope
+// Place this with other helper functions in your server.js file
+
 // Add helper function to send Telegram messages
 async function sendTelegramMessage(chatId, message) {
   const botToken = config.telegram.bot_token;
   const telegramApiUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
   
   try {
-    await axios.post(telegramApiUrl, {
+    console.log(`Debug - Sending Telegram message to chat ID: ${chatId}`);
+    console.log(`Debug - Message content: ${message}`);
+    console.log(`Debug - Using bot token: ${botToken.substring(0, 10)}...`);
+    
+    const response = await axios.post(telegramApiUrl, {
       chat_id: chatId,
       text: message,
       parse_mode: 'HTML'
     });
+    
+    console.log(`Debug - Telegram API response:`, response.status, response.data);
     return true;
   } catch (error) {
-    console.error('Error sending Telegram message:', error);
+    console.error('Error sending Telegram message:', error.message);
+    if (error.response) {
+      console.error('Telegram API error details:', {
+        status: error.response.status,
+        data: error.response.data
+      });
+    }
     return false;
   }
 }
@@ -876,6 +883,26 @@ app.get('/api/departments', async (req, res) => {
     });
   }
 });
+
+
+app.get('/api/orders/search', async (req, res) => {
+  const { q } = req.query;
+  if (!q || q.length < 2) {
+    return res.json({ results: [] });
+  }
+  const conn = await getDbConnection();
+  const [rows] = await conn.execute(
+    `SELECT netsuite_id, salesOrderNo, customerCode
+     FROM sid_v_so
+     WHERE salesOrderNo LIKE ? OR customerCode LIKE ? OR netsuite_id = ? 
+     LIMIT 10`,
+    [`%${q}%`, `%${q}%`, q]
+  );
+  await conn.end();
+  res.json({ results: rows });
+});
+
+
 
 // Start server
 app.listen(port, () => {
