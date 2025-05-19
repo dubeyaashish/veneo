@@ -1,51 +1,74 @@
-// Create this file in your backend directory
-// Save as otpService.js
+// Create otpService.js file in your project root
 
-// Simple OTP service module
-const otpService = {
-  // Generate a new OTP
-  generateOTP: (length = 6) => {
-    // Generate a random numeric OTP of specified length
-    let otp = '';
-    for (let i = 0; i < length; i++) {
-      otp += Math.floor(Math.random() * 10);
+const otpStore = {};
+
+// Function to generate a 6-digit OTP
+function generateOTP() {
+  // Generate a random 6-digit number
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+// Function to store an OTP with expiration time (10 minutes)
+function storeOTP(telegramId, email, otp) {
+  const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes from now
+  
+  otpStore[telegramId] = {
+    otp,
+    email,
+    expiresAt
+  };
+  
+  // Set up automatic cleanup after expiration
+  setTimeout(() => {
+    if (otpStore[telegramId] && otpStore[telegramId].otp === otp) {
+      delete otpStore[telegramId];
     }
-    return otp;
-  },
+  }, 10 * 60 * 1000);
   
-  // Verify an OTP (placeholder implementation)
-  verifyOTP: async (userId, otpCode) => {
-    // This is a placeholder function
-    // In a real implementation, you would check against a stored OTP in a database
-    console.log(`[OTP] Verifying OTP ${otpCode} for user ${userId}`);
-    
-    // Just return success for testing purposes
-    return {
-      success: true,
-      message: 'OTP verification simulated (not actually verified)'
-    };
-  },
-  
-  // Send OTP via SMS (placeholder implementation)
-  sendOTPviaSMS: async (phoneNumber, otpCode) => {
-    // This is a placeholder function
-    console.log(`[OTP] Would send OTP ${otpCode} to phone number ${phoneNumber}`);
-    
-    return {
-      success: true,
-      message: 'OTP SMS notification logged (not actually sent)'
-    };
-  },
-  
-  // Send OTP via Email (placeholder implementation)
-  sendOTPviaEmail: async (email, otpCode) => {
-    console.log(`[OTP] Would send OTP ${otpCode} to email ${email}`);
-    
-    return {
-      success: true,
-      message: 'OTP email notification logged (not actually sent)'
-    };
-  }
-};
+  return otp;
+}
 
-module.exports = otpService;
+// Function to verify an OTP
+function verifyOTP(telegramId, enteredOTP) {
+  const record = otpStore[telegramId];
+  
+  if (!record) {
+    return { valid: false, message: 'OTP not found. Please request a new one.' };
+  }
+  
+  if (Date.now() > record.expiresAt) {
+    delete otpStore[telegramId];
+    return { valid: false, message: 'OTP expired. Please request a new one.' };
+  }
+  
+  if (record.otp !== enteredOTP) {
+    return { valid: false, message: 'Invalid OTP. Please try again.' };
+  }
+  
+  // OTP is valid, delete it so it can't be reused
+  const email = record.email;
+  delete otpStore[telegramId];
+  
+  return { valid: true, email };
+}
+
+// Function to check if a Telegram ID has an active OTP
+function hasActiveOTP(telegramId) {
+  return !!otpStore[telegramId] && otpStore[telegramId].expiresAt > Date.now();
+}
+
+// Function to get the email associated with an active OTP
+function getEmailForOTP(telegramId) {
+  if (hasActiveOTP(telegramId)) {
+    return otpStore[telegramId].email;
+  }
+  return null;
+}
+
+module.exports = {
+  generateOTP,
+  storeOTP,
+  verifyOTP,
+  hasActiveOTP,
+  getEmailForOTP
+};

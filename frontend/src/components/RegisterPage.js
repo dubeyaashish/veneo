@@ -1,8 +1,9 @@
-// src/components/RegisterPage.js - Updated to match your backend
+// src/components/RegisterPage.js - Updated with OTP verification
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
+import OTPVerification from './OTPVerification';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
@@ -19,6 +20,8 @@ const RegistrationPage = () => {
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
   const [fetchingDepartments, setFetchingDepartments] = useState(true);
+  const [showOtpVerification, setShowOtpVerification] = useState(false);
+  const [validatedData, setValidatedData] = useState(null);
 
   useEffect(() => {
     // Redirect to login if no pending registration
@@ -32,16 +35,11 @@ const RegistrationPage = () => {
     const fetchDepartments = async () => {
       try {
         setFetchingDepartments(true);
-        console.log('Fetching departments from:', `${API_URL}/departments`);
-        
         const response = await axios.get(`${API_URL}/departments`);
-        console.log('Departments response:', response.data);
         
         if (response.data.success && Array.isArray(response.data.departments)) {
-          // Extract department names from the response
           setDepartments(response.data.departments.map(dept => dept.Name_no_hierarchy));
         } else {
-          console.error('Failed to fetch departments:', response.data);
           setErrors(prev => ({
             ...prev, 
             departments: 'Failed to load departments from server'
@@ -63,7 +61,6 @@ const RegistrationPage = () => {
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    console.log(`Changed ${name} to ${value}`);
     
     setFormData(prev => ({
       ...prev,
@@ -113,7 +110,7 @@ const RegistrationPage = () => {
     try {
       setLoading(true);
       
-      // Prepare data for the API call
+      // Prepare data for OTP verification
       const userData = {
         telegram_id: pendingRegistration.telegram_id,
         email: formData.email,
@@ -121,30 +118,22 @@ const RegistrationPage = () => {
         department: formData.department
       };
       
-      console.log('Submitting registration data:', userData);
+      // Store validated data and show OTP verification
+      setValidatedData(userData);
+      setShowOtpVerification(true);
       
-      // Send registration data to the server
-      const response = await axios.post(`${API_URL}/auth/complete-registration`, userData);
-      
-      console.log('Registration response:', response.data);
-      
-      if (response.data.success) {
-        // Complete registration in auth context
-        completeRegistration(response.data.user);
-        navigate('/');
-      } else {
-        setErrors({
-          submit: response.data.message || 'Registration failed. Please try again.'
-        });
-      }
     } catch (error) {
-      console.error('Registration error:', error);
+      console.error('Validation error:', error);
       setErrors({
-        submit: error.response?.data?.message || 'An error occurred during registration. Please try again.'
+        submit: 'An error occurred during validation. Please try again.'
       });
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleBack = () => {
+    setShowOtpVerification(false);
   };
 
   const handleCancel = () => {
@@ -155,6 +144,26 @@ const RegistrationPage = () => {
   // If no pending registration data, don't render the form
   if (!pendingRegistration) {
     return null;
+  }
+
+  // Show OTP verification if form is validated
+  if (showOtpVerification && validatedData) {
+    return (
+      <div className="container">
+        <div className="row justify-content-center mt-5">
+          <div className="col-md-6">
+            <div className="card shadow-lg border-0">
+              <div className="card-body p-5">
+                <OTPVerification 
+                  userData={validatedData} 
+                  onBack={handleBack} 
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -245,13 +254,6 @@ const RegistrationPage = () => {
                       <i className="bi bi-hourglass-split me-1"></i> Loading departments...
                     </div>
                   )}
-                  
-                  {/* Debug info for development */}
-                  {process.env.NODE_ENV === 'development' && departments.length > 0 && (
-                    <div className="text-muted small mt-2">
-                      Loaded {departments.length} departments
-                    </div>
-                  )}
                 </div>
                 
                 <div className="d-grid gap-2 mt-4">
@@ -267,8 +269,8 @@ const RegistrationPage = () => {
                       </>
                     ) : (
                       <>
-                        <i className="bi bi-check-circle me-2"></i>
-                        Complete Registration
+                        <i className="bi bi-envelope-check me-2"></i>
+                        Continue with Email Verification
                       </>
                     )}
                   </button>

@@ -1,4 +1,4 @@
-// src/components/OTPVerification.js
+// src/components/OTPVerification.js - Updated for better UX and error handling
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
@@ -172,14 +172,13 @@ const OTPVerification = ({ userData, onBack }) => {
       <form onSubmit={handleSubmit}>
         <div className="mb-4">
           <label className="form-label">Enter 6-digit OTP</label>
-          <div className="d-flex justify-content-between mb-3">
+          <div className="otp-input-container">
             {otp.map((digit, index) => (
               <input
                 key={index}
                 ref={el => inputRefs.current[index] = el}
                 type="text"
-                className="form-control form-control-lg text-center"
-                style={{ width: '48px', marginRight: index < 5 ? '8px' : '0' }}
+                className="otp-input"
                 maxLength={1}
                 value={digit}
                 onChange={(e) => handleOtpChange(index, e.target.value)}
@@ -208,10 +207,16 @@ const OTPVerification = ({ userData, onBack }) => {
           </button>
           
           <div className="text-center mt-3">
-            <p className="mb-2">Didn't receive the OTP?</p>
+            <p className="timer mb-2">
+              {countdown > 0 ? (
+                <>Didn't receive the OTP? Resend in <strong>{countdown}s</strong></>
+              ) : (
+                "Didn't receive the OTP?"
+              )}
+            </p>
             <button
               type="button"
-              className="btn btn-link"
+              className="resend-button"
               onClick={handleResendOTP}
               disabled={countdown > 0 || sendingOtp}
             >
@@ -220,8 +225,6 @@ const OTPVerification = ({ userData, onBack }) => {
                   <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
                   Sending...
                 </>
-              ) : countdown > 0 ? (
-                `Resend OTP in ${countdown}s`
               ) : (
                 'Resend OTP'
               )}
@@ -230,7 +233,7 @@ const OTPVerification = ({ userData, onBack }) => {
           
           <button
             type="button"
-            className="btn btn-outline-secondary"
+            className="btn btn-outline-secondary mt-3"
             onClick={onBack}
             disabled={loading || sendingOtp}
           >

@@ -7,7 +7,9 @@ const bodyParser = require('body-parser');
 const config = require('./config');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
-
+const otpService = require('./otpService');
+const emailService = require('./emailService');
+const path = require('path'); 
 const app = express();
 const port = process.env.PORT || 5000;
 
@@ -21,126 +23,8 @@ const getDbConnection = async () => {
   return mysql.createConnection(config.db);
 };
 
-const transporter = nodemailer.createTransport({
-  host: 'smtp.office365.com',  // Outlook SMTP server
-  port: 587,
-  secure: false,  // true for 465, false for other ports
-  auth: {
-    user: 'misteam@peerapat.com',
-    pass: 'Poppy*1234'
-  },
-  tls: {
-    ciphers: 'SSLv3'
-  }
-});
 
-async function sendOTPEmail(email, otp) {
-  try {
-    const mailOptions = {
-      from: '"VERP System" <misteam@peerapat.com>',
-      to: email,
-      subject: 'Your OTP for VERP Registration',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 5px;">
-          <h2 style="color: #4361ee; text-align: center;">VERP Registration</h2>
-          <p style="margin-bottom: 20px;">Thank you for registering with VERP. To complete your registration, please use the following One-Time Password (OTP):</p>
-          <div style="background-color: #f8f9fa; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 2px; border-radius: 5px; margin-bottom: 20px;">
-            ${otp}
-          </div>
-          <p>This OTP will expire in 10 minutes.</p>
-          <p>If you did not request this registration, please ignore this email.</p>
-          <p style="margin-top: 30px; font-size: 12px; color: #777; text-align: center;">
-            This is an automated email. Please do not reply to this message.
-          </p>
-        </div>
-      `
-    };
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log('Email sent: %s', info.messageId);
-    return true;
-  } catch (error) {
-    console.error('Error sending email:', error);
-    return false;
-  }
-}
-
-module.exports = {
-  sendOTPEmail
-};
-
-const otpStore = {};
-
-// Function to generate a 6-digit OTP
-function generateOTP() {
-  // Generate a random 6-digit number
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
-// Function to store an OTP with expiration time (10 minutes)
-function storeOTP(telegramId, email, otp) {
-  const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes from now
-  
-  otpStore[telegramId] = {
-    otp,
-    email,
-    expiresAt
-  };
-  
-  // Set up automatic cleanup after expiration
-  setTimeout(() => {
-    if (otpStore[telegramId] && otpStore[telegramId].otp === otp) {
-      delete otpStore[telegramId];
-    }
-  }, 10 * 60 * 1000);
-  
-  return otp;
-}
-
-// Function to verify an OTP
-function verifyOTP(telegramId, enteredOTP) {
-  const record = otpStore[telegramId];
-  
-  if (!record) {
-    return { valid: false, message: 'OTP not found. Please request a new one.' };
-  }
-  
-  if (Date.now() > record.expiresAt) {
-    delete otpStore[telegramId];
-    return { valid: false, message: 'OTP expired. Please request a new one.' };
-  }
-  
-  if (record.otp !== enteredOTP) {
-    return { valid: false, message: 'Invalid OTP. Please try again.' };
-  }
-  
-  // OTP is valid, delete it so it can't be reused
-  const email = record.email;
-  delete otpStore[telegramId];
-  
-  return { valid: true, email };
-}
-
-// Function to check if a Telegram ID has an active OTP
-function hasActiveOTP(telegramId) {
-  return !!otpStore[telegramId] && otpStore[telegramId].expiresAt > Date.now();
-}
-
-// Function to get the email associated with an active OTP
-function getEmailForOTP(telegramId) {
-  if (hasActiveOTP(telegramId)) {
-    return otpStore[telegramId].email;
-  }
-  return null;
-}
-
-module.exports = {
-  generateOTP,
-  storeOTP,
-  verifyOTP,
-  hasActiveOTP,
-  getEmailForOTP
-};
 // Authentication endpoint
 app.post('/api/auth/telegram', async (req, res) => {
   try {
@@ -1024,8 +908,6 @@ app.get('/api/orders/search', async (req, res) => {
 });
 
 
-// Then add these routes
-
 // Send OTP endpoint
 app.post('/api/auth/send-otp', async (req, res) => {
   try {
@@ -1093,6 +975,9 @@ app.post('/api/auth/send-otp', async (req, res) => {
     });
   }
 });
+
+// Verify OTP endpoint should also use otpService.verifyOTP method
+// Update your verify-otp and resend-otp endpoints similarly
 
 // Verify OTP endpoint
 app.post('/api/auth/verify-otp', async (req, res) => {
