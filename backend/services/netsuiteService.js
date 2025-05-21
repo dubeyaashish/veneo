@@ -71,10 +71,14 @@ async function updateOrderItem(itemHref, changes) {
   return { success: true, status: response.status, data: response.data };
 }
 
-async function sendTelegramMessage(chatId, message) {
+async function sendTelegramMessage(chatId, message, options = {}) {
   const botToken = config.telegram.bot_token;
   const telegramApiUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
-  await axios.post(telegramApiUrl, { chat_id: chatId, text: message, parse_mode: 'HTML' });
+  const payload = { chat_id: chatId, text: message, parse_mode: 'HTML' };
+  if (options.replyMarkup) {
+    payload.reply_markup = options.replyMarkup;
+  }
+  await axios.post(telegramApiUrl, payload);
   return true;
 }
 

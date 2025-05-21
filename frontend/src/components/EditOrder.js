@@ -36,6 +36,8 @@ const EditOrder = () => {
   const [isMyOrder, setIsMyOrder] = useState(false);
   const [itemsViewMode, setItemsViewMode] = useState('card');
   const [allCollapsed, setAllCollapsed] = useState(false);
+  const [departments, setDepartments] = useState([]);
+  const [selectedDepartments, setSelectedDepartments] = useState([]);
 
   useEffect(() => {
     const fetchOrder = async () => {
@@ -99,6 +101,20 @@ const EditOrder = () => {
     fetchOrder();
   }, [id, currentUser]);
 
+  useEffect(() => {
+    const fetchDepartments = async () => {
+      try {
+        const res = await axios.get(`${API_URL}/departments`);
+        if (res.data.success) {
+          setDepartments(res.data.departments.map(d => d.Name_no_hierarchy));
+        }
+      } catch (err) {
+        console.error('Error fetching departments:', err);
+      }
+    };
+    fetchDepartments();
+  }, []);
+
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData({
@@ -118,6 +134,11 @@ const EditOrder = () => {
       ...formData,
       items: updatedItems
     });
+  };
+
+  const handleDepartmentChange = (e) => {
+    const options = Array.from(e.target.selectedOptions);
+    setSelectedDepartments(options.map(o => o.value));
   };
 
   const toggleCollapse = (index) => {
@@ -144,7 +165,8 @@ const handleSubmit = async (e) => {
 
   try {
     setProcessing(true);
-    const response = await axios.post(`${API_URL}/order/${id}/update`, formData);
+    const payload = { ...formData, selectedDepartments, updatedBy: currentUser?.telegram_id };
+    const response = await axios.post(`${API_URL}/order/${id}/update`, payload);
 
     setLogs(response.data.logs);
     
@@ -379,6 +401,20 @@ const handleSubmit = async (e) => {
                         onClick={() => setShowRemarkModal(true)}
                       />
                     </div>
+                  </div>
+                  <div className="col-md-6 mb-3">
+                    <label className="form-label">แจ้งเตือนไปยังแผนก:</label>
+                    <select
+                      multiple
+                      className="form-control"
+                      value={selectedDepartments}
+                      onChange={handleDepartmentChange}
+                    >
+                      {departments.map((dept, idx) => (
+                        <option key={idx} value={dept}>{dept}</option>
+                      ))}
+                    </select>
+                    <small className="text-muted">กด Ctrl หรือ Command เพื่อเลือกหลายแผนก</small>
                   </div>
 
                   {/* ---- Additional Header Fields ---- */}

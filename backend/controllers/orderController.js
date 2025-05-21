@@ -39,6 +39,57 @@ async function getOrderDetails(req, res) {
   }
 }
 
+// POST /api/order/:id/respond
+async function respondOrder(req, res) {
+  try {
+    const orderId = req.params.id;
+    const { department, action, remark = '', respondedBy } = req.body;
+
+    if (!department || !action) {
+      return res.status(400).json({ success: false, message: 'Missing department or action' });
+    }
+
+    await db.pool.query(
+      'INSERT INTO order_responses (netsuite_id, department, action, remark, responded_by) VALUES (?, ?, ?, ?, ?)',
+      [orderId, department, action, remark, respondedBy || null]
+    );
+
+    const [wfRows] = await db.pool.query('SELECT updated_by, selected_departments FROM order_workflow WHERE netsuite_id = ? LIMIT 1', [orderId]);
+    const updatedBy = wfRows.length > 0 ? wfRows[0].updated_by : null;
+    const soUrl = `https://ppg24.tech/order/${orderId}`;
+
+    if (action === 'revise' && updatedBy) {
+      await netsuite.sendTelegramMessage(
+        updatedBy,
+        `🔄 มีการขอแก้ไขจาก ${department} สำหรับ SO ${orderId}\nหมายเหตุ: ${remark}\n🔗 ${soUrl}`
+      );
+    }
+
+    if (wfRows.length > 0) {
+      const departments = (wfRows[0].selected_departments || '').split(',').map(d => d.trim()).filter(Boolean);
+      for (const dept of departments) {
+        const [users] = await db.pool.query(
+          'SELECT telegram_id FROM users WHERE department = ? AND registration_complete = 1',
+          [dept]
+        );
+        for (const user of users) {
+          if (user.telegram_id) {
+            await netsuite.sendTelegramMessage(
+              user.telegram_id,
+              `ℹ️ สถานะล่าสุดของ SO ${orderId}: ${department} ${action === 'approve' ? 'ผ่าน' : 'ส่งแก้ไข'}\n🔗 ${soUrl}`
+            );
+          }
+        }
+      }
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error in respondOrder:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+}
+
 // POST /api/order/:id/update
 async function updateOrder(req, res) {
   try {
@@ -54,7 +105,9 @@ async function updateOrder(req, res) {
       custbody_ar_all_memo,
       custbody_ar_so_statusbill,
       custbody_ar_estimate_contrat1,
-      items
+      items,
+      selectedDepartments = [],
+      updatedBy
     } = req.body;
 
     const currentSO = await netsuite.fetchSalesOrder(orderId);
@@ -137,6 +190,43 @@ async function updateOrder(req, res) {
           }
           if (successCount > 0) logs.push(`✅ ส่งการแจ้งเตือนไปยังแผนกประสานงานขายแล้ว (${successCount} คน)`);
         }
+
+        if (Array.isArray(selectedDepartments) && selectedDepartments.length > 0) {
+          await db.pool.query(
+            'INSERT INTO order_workflow (netsuite_id, updated_by, selected_departments) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE updated_by = VALUES(updated_by), selected_departments = VALUES(selected_departments)',
+            [orderId, updatedBy || null, selectedDepartments.join(',')]
+          );
+
+          const baseUrl = 'https://ppg24.tech/response';
+          for (const dept of selectedDepartments) {
+            const [deptUsers] = await db.pool.query(
+              'SELECT telegram_id FROM users WHERE department = ? AND registration_complete = 1',
+              [dept]
+            );
+            const replyMarkup = {
+              inline_keyboard: [
+                [
+                  { text: '✅ ผ่าน', url: `${baseUrl}/${orderId}?dept=${encodeURIComponent(dept)}&action=approve` }
+                ],
+                [
+                  { text: '✏️ ส่งไปแก้ไข', url: `${baseUrl}/${orderId}?dept=${encodeURIComponent(dept)}&action=revise` }
+                ]
+              ]
+            };
+            let count = 0;
+            for (const user of deptUsers) {
+              if (user.telegram_id) {
+                await netsuite.sendTelegramMessage(
+                  user.telegram_id,
+                  `🔔 มีการอัปเดต SalesOrder ${orderId}\n🔗 ${soUrl}`,
+                  { replyMarkup }
+                );
+                count++;
+              }
+            }
+            if (count > 0) logs.push(`✅ แจ้งเตือน ${dept} แล้ว (${count} คน)`);
+          }
+        }
       } catch (err) {
         console.error('Error notifying coordination department:', err);
         logs.push('❌ Error notifying coordination department');
@@ -178,6 +268,7 @@ module.exports = {
   getOrdersByStaff,
   getOrderDetails,
   updateOrder,
+  respondOrder,
   getDepartments,
   searchOrders
 };

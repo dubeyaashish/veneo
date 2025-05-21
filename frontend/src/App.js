@@ -10,6 +10,7 @@ import RegistrationPage from './components/RegisterPage';
 import Dashboard from './components/Dashboard';
 import SearchPage from './components/SearchPage';
 import EditOrder from './components/EditOrder';
+import SaleCoResponse from './components/SaleCoResponse';
 import Navbar from './components/Navbar';
 import { AuthProvider, PrivateRoute } from './context/AuthContext';
 import './App.css';
@@ -37,6 +38,11 @@ function App() {
               <Route path="/order/:id" element={
                 <PrivateRoute>
                   <EditOrder />
+                </PrivateRoute>
+              } />
+              <Route path="/response/:id" element={
+                <PrivateRoute>
+                  <SaleCoResponse />
                 </PrivateRoute>
               } />
               <Route path="*" element={<Navigate to="/" replace />} />
