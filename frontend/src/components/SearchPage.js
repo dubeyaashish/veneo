@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 
-const API_URL = process.env.REACT_APP_API_URL || 'https://ppg24.tech/api';
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 const SearchPage = () => {
   const [orderId, setOrderId] = useState('');
