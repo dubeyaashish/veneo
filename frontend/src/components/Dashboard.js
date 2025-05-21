@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+const API_URL = process.env.REACT_APP_API_URL || 'https://ppg24.tech/api';
 
 const Dashboard = () => {
   const { currentUser } = useAuth();
@@ -165,7 +165,7 @@ const Dashboard = () => {
                     <tr key={order.salesOrderNo}>
                       <td>{order.salesOrderNo}</td>
                       <td>{order.customerCode}</td>
-                      <td>{new Date(order.salesOrderDate).toLocaleDateString()}</td>
+                      <td>{new Date(order.salesOrderDate).toLocaleDateString('en-GB')}</td>
                       <td>${parseFloat(order.grandTotal).toFixed(2)}</td>
                       <td>
                         <span className={`badge ${order.status === 'created' ? 'bg-success' : 'bg-warning'}`}>

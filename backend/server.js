@@ -1,7 +1,6 @@
 // server.js - Main server file
 const express = require('express');
 const cors = require('cors');
-const mysql = require('mysql2/promise');
 const axios = require('axios');
 const bodyParser = require('body-parser');
 const config = require('./config');
@@ -9,8 +8,9 @@ const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const otpService = require('./otpService');
 const emailService = require('./emailService');
-const path = require('path'); 
 const app = express();
+const db = require('./db');
+const path = require('path');
 const port = process.env.PORT || 5000;
 
 // Middleware
@@ -18,12 +18,23 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static('public'));
 
-// Database connection
-const getDbConnection = async () => {
-  return mysql.createConnection(config.db);
-};
+// Serve React's static files after build (for production)
+if (process.env.NODE_ENV === 'production') {
+    app.use(express.static(path.join(__dirname, 'build')));
+}
 
-
+// Database connection test on startup
+db.testConnection()
+  .then(success => {
+    if (success) {
+      console.log('Database ready for connections');
+    } else {
+      console.error('WARNING: Database connection test failed');
+    }
+  })
+  .catch(err => {
+    console.error('Error testing database connection:', err);
+  });
 
 // Authentication endpoint
 app.post('/api/auth/telegram', async (req, res) => {
@@ -40,10 +51,8 @@ app.post('/api/auth/telegram', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid Telegram data' });
     }
     
-    const conn = await getDbConnection();
-    
     // Check if user exists
-    const [userRows] = await conn.execute(
+    const [userRows] = await db.pool.query(
       'SELECT * FROM users WHERE telegram_id = ?',
       [telegramUser.id]
     );
@@ -53,7 +62,7 @@ app.post('/api/auth/telegram', async (req, res) => {
     
     if (userRows.length === 0) {
       // New user - create account
-      const [result] = await conn.execute(
+      const [result] = await db.pool.query(
         'INSERT INTO users (telegram_id, first_name, last_name, username, photo_url, auth_date, registration_complete) VALUES (?, ?, ?, ?, ?, ?, ?)',
         [
           telegramUser.id,
@@ -66,14 +75,18 @@ app.post('/api/auth/telegram', async (req, res) => {
         ]
       );
       
-      const [newUser] = await conn.execute('SELECT * FROM users WHERE id = ?', [result.insertId]);
+      const [newUser] = await db.pool.query(
+        'SELECT * FROM users WHERE id = ?', 
+        [result.insertId]
+      );
+      
       user = newUser[0];
       isNewUser = true;
     } else {
       // Existing user - update info
       user = userRows[0];
       
-      await conn.execute(
+      await db.pool.query(
         'UPDATE users SET first_name = ?, last_name = ?, username = ?, photo_url = ?, auth_date = ? WHERE telegram_id = ?',
         [
           telegramUser.first_name,
@@ -87,7 +100,7 @@ app.post('/api/auth/telegram', async (req, res) => {
     }
     
     // Check if user has a staffCode mapping
-    const [staffRows] = await conn.execute(
+    const [staffRows] = await db.pool.query(
       'SELECT * FROM staff_telegram_mapping WHERE telegram_id = ?',
       [telegramUser.id]
     );
@@ -105,8 +118,6 @@ app.post('/api/auth/telegram', async (req, res) => {
       registration_complete: isNewUser ? false : (user.registration_complete === 1)
     };
     
-    await conn.end();
-    
     res.json({
       success: true,
       user: userResponse
@@ -121,7 +132,6 @@ app.post('/api/auth/telegram', async (req, res) => {
 });
 
 // Complete registration endpoint
-// Modify the existing complete-registration endpoint in server.js
 app.post('/api/auth/complete-registration', async (req, res) => {
   try {
     const userData = req.body;
@@ -140,21 +150,18 @@ app.post('/api/auth/complete-registration', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid email format' });
     }
     
-    const conn = await getDbConnection();
-    
     // Check if user exists
-    const [userRows] = await conn.execute(
+    const [userRows] = await db.pool.query(
       'SELECT * FROM users WHERE telegram_id = ?',
       [userData.telegram_id]
     );
     
     if (userRows.length === 0) {
-      await conn.end();
       return res.status(404).json({ success: false, message: 'User not found' });
     }
     
     // Update user with email, employee ID, department, and mark registration as complete
-    await conn.execute(
+    await db.pool.query(
       'UPDATE users SET email = ?, employee_id = ?, department = ?, registration_complete = TRUE WHERE telegram_id = ?',
       [userData.email, userData.employee_id, userData.department, userData.telegram_id]
     );
@@ -162,20 +169,20 @@ app.post('/api/auth/complete-registration', async (req, res) => {
     // Check if we can map this employee ID to a staff code
     try {
       // Create or update the staff_telegram_mapping table
-      const [mappingRows] = await conn.execute(
+      const [mappingRows] = await db.pool.query(
         'SELECT * FROM staff_telegram_mapping WHERE telegram_id = ?',
         [userData.telegram_id]
       );
       
       if (mappingRows.length === 0) {
         // Create a new mapping
-        await conn.execute(
+        await db.pool.query(
           'INSERT INTO staff_telegram_mapping (telegram_id, staff_code) VALUES (?, ?)',
           [userData.telegram_id, userData.employee_id]
         );
       } else {
         // Update existing mapping
-        await conn.execute(
+        await db.pool.query(
           'UPDATE staff_telegram_mapping SET staff_code = ? WHERE telegram_id = ?',
           [userData.employee_id, userData.telegram_id]
         );
@@ -186,12 +193,10 @@ app.post('/api/auth/complete-registration', async (req, res) => {
     }
     
     // Get the updated user data
-    const [updatedRows] = await conn.execute(
+    const [updatedRows] = await db.pool.query(
       'SELECT u.*, stm.staff_code FROM users u LEFT JOIN staff_telegram_mapping stm ON u.telegram_id = stm.telegram_id WHERE u.telegram_id = ?',
       [userData.telegram_id]
     );
-    
-    await conn.end();
     
     if (updatedRows.length === 0) {
       return res.status(404).json({ success: false, message: 'User not found after update' });
@@ -225,20 +230,17 @@ app.post('/api/auth/complete-registration', async (req, res) => {
     });
   }
 });
+
 // Get orders associated with a staff member
 app.get('/api/orders/staff/:staffCode', async (req, res) => {
   try {
     const { staffCode } = req.params;
     
-    const conn = await getDbConnection();
-    
     // Get orders for this staff code
-    const [orders] = await conn.execute(
+    const [orders] = await db.pool.query(
       'SELECT * FROM sid_v_so WHERE staffCode = ? ORDER BY salesOrderDate DESC LIMIT 20',
       [staffCode]
     );
-    
-    await conn.end();
     
     res.json({
       success: true,
@@ -275,11 +277,9 @@ app.get('/api/order/:id', async (req, res) => {
     const items = await fetchOrderItems(orderId);
     
     // Fetch database info
-    const conn = await getDbConnection();
-    const conditions = await getConditions(conn);
-    const itemMap = await getItemMap(conn);
-    const locations = await getLocations(conn);
-    await conn.end();
+    const conditions = await getConditions();
+    const itemMap = await getItemMap();
+    const locations = await getLocations();
     
     // Return complete order details
     res.json({
@@ -297,12 +297,6 @@ app.get('/api/order/:id', async (req, res) => {
     res.status(500).json({ error: 'Server error', message: error.message });
   }
 });
-
-// Update order
-// In server.js - Modify the existing POST route for updating orders
-
-// Replace your entire update order route with this corrected version
-// Make sure the sendTelegramMessage function is OUTSIDE of this route handler
 
 // Update order
 app.post('/api/order/:id/update', async (req, res) => {
@@ -455,23 +449,19 @@ app.post('/api/order/:id/update', async (req, res) => {
     // Check if order has been modified and send notifications
     if (Object.keys(headerChanges).length > 0 || itemsUpdated.length > 0) {
       try {
-        // Get the order details
-        const conn = await getDbConnection();
         // Always send notification, don't require DB query
-        const soNo = orderId;  // Or use a string like "Sales Order #" + orderId
-        const soUrl = `${config.accounting_url}${orderId}`;
+        const soUrl = `https://ppg24.tech/order/${orderId}`;
         const soSubject = ""; // or "Sales Order updated" (if you want)
 
         // Notify coordination department users
         try {
-          const [coordUsers] = await conn.execute(
+          const [coordUsers] = await db.pool.query(
             "SELECT telegram_id FROM users WHERE department = 'M180101 แผนกประสานงานขาย' AND registration_complete = 1"
           );
 
           if (coordUsers.length > 0) {
             const coordMessage =
               `✅ แก้ไข SaleOrder สมบูรณ์ ดำเนินการต่อได้\n` +
-              `📄 เลขที่ SO: ${soNo}\n` +
               (soSubject ? `📋 รายละเอียด: ${soSubject}\n` : "") +
               `🔗 ลิงก์: ${soUrl}`;
 
@@ -492,7 +482,6 @@ app.post('/api/order/:id/update', async (req, res) => {
           logs.push('❌ Error notifying coordination department');
         }
 
-        await conn.end();
       } catch (error) {
         console.error('Error sending notifications:', error);
         logs.push('❌ เกิดข้อผิดพลาดในการส่งการแจ้งเตือน');
@@ -511,9 +500,353 @@ app.post('/api/order/:id/update', async (req, res) => {
   }
 });
 
+// Get departments for dropdown
+app.get('/api/departments', async (req, res) => {
+  try {
+    // Get departments from erp_deep table
+    const [departments] = await db.pool.query(
+      'SELECT Name_no_hierarchy FROM erp_deep ORDER BY Name_no_hierarchy'
+    );
+    
+    res.json({
+      success: true,
+      departments
+    });
+  } catch (error) {
+    console.error('Error fetching departments:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch departments'
+    });
+  }
+});
 
-// Add this function OUTSIDE of all route handlers, at the top-level scope
-// Place this with other helper functions in your server.js file
+// Search orders
+app.get('/api/orders/search', async (req, res) => {
+  const { q } = req.query;
+  if (!q || q.length < 2) {
+    return res.json({ results: [] });
+  }
+  
+  const [rows] = await db.pool.query(
+    `SELECT netsuite_id, salesOrderNo, customerCode
+     FROM sid_v_so
+     WHERE salesOrderNo LIKE ? OR customerCode LIKE ? OR netsuite_id = ? 
+     LIMIT 10`,
+    [`%${q}%`, `%${q}%`, q]
+  );
+  
+  res.json({ results: rows });
+});
+
+// Send OTP endpoint
+app.post('/api/auth/send-otp', async (req, res) => {
+  try {
+    const { telegram_id, email, employee_id, department } = req.body;
+    
+    if (!telegram_id || !email || !employee_id || !department) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing required information' 
+      });
+    }
+    
+    // Validate email format
+    const emailRegex = /\S+@\S+\.\S+/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid email format' 
+      });
+    }
+    
+    // Check if user exists
+    const [userRows] = await db.pool.query(
+      'SELECT * FROM users WHERE telegram_id = ?',
+      [telegram_id]
+    );
+    
+    if (userRows.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+    }
+    
+    // Generate OTP
+    const otp = otpService.generateOTP();
+    
+    // Store OTP
+    otpService.storeOTP(telegram_id, email, otp);
+    
+    // Send OTP via email
+    const emailSent = await emailService.sendOTPEmail(email, otp);
+    
+    if (emailSent) {
+      res.json({
+        success: true,
+        message: 'OTP sent successfully',
+        email: email.replace(/(.{2})(.*)(@.*)/, '$1****$3') // Mask email for privacy
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to send OTP email'
+      });
+    }
+  } catch (error) {
+    console.error('Error sending OTP:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+});
+
+// Verify OTP endpoint
+app.post('/api/auth/verify-otp', async (req, res) => {
+  try {
+    const { telegram_id, otp, email, employee_id, department } = req.body;
+    
+    if (!telegram_id || !otp || !email || !employee_id || !department) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing required information' 
+      });
+    }
+    
+    // Verify OTP
+    const verification = otpService.verifyOTP(telegram_id, otp);
+    
+    if (!verification.valid) {
+      return res.status(400).json({ 
+        success: false, 
+        message: verification.message 
+      });
+    }
+    
+    // Verify email matches
+    if (verification.email !== email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email mismatch. Please request a new OTP.'
+      });
+    }
+    
+    // OTP is valid, proceed with registration
+    // Update user with email, employee ID, department, and mark registration as complete
+    await db.pool.query(
+      'UPDATE users SET email = ?, employee_id = ?, department = ?, registration_complete = TRUE WHERE telegram_id = ?',
+      [email, employee_id, department, telegram_id]
+    );
+    
+    // Check if we can map this employee ID to a staff code
+    try {
+      // Create or update the staff_telegram_mapping table
+      const [mappingRows] = await db.pool.query(
+        'SELECT * FROM staff_telegram_mapping WHERE telegram_id = ?',
+        [telegram_id]
+      );
+      
+      if (mappingRows.length === 0) {
+        // Create a new mapping
+        await db.pool.query(
+          'INSERT INTO staff_telegram_mapping (telegram_id, staff_code) VALUES (?, ?)',
+          [telegram_id, employee_id]
+        );
+      } else {
+        // Update existing mapping
+        await db.pool.query(
+          'UPDATE staff_telegram_mapping SET staff_code = ? WHERE telegram_id = ?',
+          [employee_id, telegram_id]
+        );
+      }
+    } catch (error) {
+      console.error('Error creating staff mapping:', error);
+      // Continue even if mapping fails - we have the essential registration data
+    }
+    
+    // Get the updated user data
+    const [updatedRows] = await db.pool.query(
+      'SELECT u.*, stm.staff_code FROM users u LEFT JOIN staff_telegram_mapping stm ON u.telegram_id = stm.telegram_id WHERE u.telegram_id = ?',
+      [telegram_id]
+    );
+    
+    if (updatedRows.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found after update' 
+      });
+    }
+    
+    const user = updatedRows[0];
+    
+    const userResponse = {
+      id: user.id,
+      telegram_id: user.telegram_id,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      username: user.username,
+      photo_url: user.photo_url,
+      email: user.email,
+      employee_id: user.employee_id,
+      department: user.department,
+      staff_code: user.staff_code,
+      registration_complete: user.registration_complete === 1
+    };
+    
+    res.json({
+      success: true,
+      user: userResponse
+    });
+  } catch (error) {
+    console.error('Error verifying OTP:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+});
+
+// Resend OTP endpoint
+app.post('/api/auth/resend-otp', async (req, res) => {
+  try {
+    const { telegram_id, email } = req.body;
+    
+    if (!telegram_id || !email) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing telegram_id or email' 
+      });
+    }
+    
+    // Generate new OTP
+    const otp = otpService.generateOTP();
+    
+    // Store OTP
+    otpService.storeOTP(telegram_id, email, otp);
+    
+    // Send OTP via email
+    const emailSent = await emailService.sendOTPEmail(email, otp);
+    
+    if (emailSent) {
+      res.json({
+        success: true,
+        message: 'OTP resent successfully',
+        email: email.replace(/(.{2})(.*)(@.*)/, '$1****$3') // Mask email for privacy
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to resend OTP email'
+      });
+    }
+  } catch (error) {
+    console.error('Error resending OTP:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+});
+
+// In production, serve React app for all other routes
+if (process.env.NODE_ENV === 'production') {
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'build', 'index.html'));
+  });
+}
+
+// Helper Functions
+async function getVenioSONumber(netsuiteId) {
+  try {
+    const [rows] = await db.pool.query(
+      'SELECT salesOrderNo FROM sid_v_so WHERE netsuite_id = ? LIMIT 1',
+      [netsuiteId]
+    );
+    
+    return rows.length > 0 ? rows[0].salesOrderNo : null;
+  } catch (error) {
+    console.error('Error fetching Venio SO:', error);
+    return null;
+  }
+}
+
+async function getCustomerInfo(customerId) {
+  try {
+    // Get customer name
+    const [nameRows] = await db.pool.query(
+      'SELECT DISTINCT name FROM erp_shipto WHERE internal_id = ?',
+      [customerId]
+    );
+    
+    // Get shipping addresses
+    const [addressRows] = await db.pool.query(
+      'SELECT address_internal_id, shipping_address FROM erp_shipto WHERE internal_id = ?',
+      [customerId]
+    );
+    
+    return {
+      customerName: nameRows.length > 0 ? nameRows[0].name : '',
+      shippingAddresses: addressRows
+    };
+  } catch (error) {
+    console.error('Error fetching customer info:', error);
+    return { customerName: '', shippingAddresses: [] };
+  }
+}
+
+async function getConditions() {
+  try {
+    const [rows] = await db.pool.query('SELECT * FROM billing_conditions ORDER BY condition_group, id');
+    
+    // Group by condition_group
+    const conditions = {};
+    for (const row of rows) {
+      if (!conditions[row.condition_group]) {
+        conditions[row.condition_group] = [];
+      }
+      conditions[row.condition_group].push(row);
+    }
+    
+    return conditions;
+  } catch (error) {
+    console.error('Error fetching conditions:', error);
+    return {};
+  }
+}
+
+async function getItemMap() {
+  try {
+    const [rows] = await db.pool.query('SELECT Internal_ID, Item FROM erp_price');
+    
+    const itemMap = {};
+    for (const row of rows) {
+      itemMap[row.Internal_ID] = row.Item;
+    }
+    
+    return itemMap;
+  } catch (error) {
+    console.error('Error fetching item map:', error);
+    return {};
+  }
+}
+
+async function getLocations() {
+  try {
+    const [rows] = await db.pool.query('SELECT Internal_ID, Name FROM erp_location');
+    
+    const locations = {};
+    for (const row of rows) {
+      locations[row.Internal_ID] = row.Name;
+    }
+    
+    return locations;
+  } catch (error) {
+    console.error('Error fetching locations:', error);
+    return {};
+  }
+}
 
 // Add helper function to send Telegram messages
 async function sendTelegramMessage(chatId, message) {
@@ -542,103 +875,6 @@ async function sendTelegramMessage(chatId, message) {
       });
     }
     return false;
-  }
-}
-
-// Helper Functions
-async function getVenioSONumber(netsuiteId) {
-  try {
-    const conn = await getDbConnection();
-    const [rows] = await conn.execute(
-      'SELECT salesOrderNo FROM sid_v_so WHERE netsuite_id = ? LIMIT 1',
-      [netsuiteId]
-    );
-    await conn.end();
-    
-    return rows.length > 0 ? rows[0].salesOrderNo : null;
-  } catch (error) {
-    console.error('Error fetching Venio SO:', error);
-    return null;
-  }
-}
-
-async function getCustomerInfo(customerId) {
-  try {
-    const conn = await getDbConnection();
-    
-    // Get customer name
-    const [nameRows] = await conn.execute(
-      'SELECT DISTINCT name FROM erp_shipto WHERE internal_id = ?',
-      [customerId]
-    );
-    
-    // Get shipping addresses
-    const [addressRows] = await conn.execute(
-      'SELECT address_internal_id, shipping_address FROM erp_shipto WHERE internal_id = ?',
-      [customerId]
-    );
-    
-    await conn.end();
-    
-    return {
-      customerName: nameRows.length > 0 ? nameRows[0].name : '',
-      shippingAddresses: addressRows
-    };
-  } catch (error) {
-    console.error('Error fetching customer info:', error);
-    return { customerName: '', shippingAddresses: [] };
-  }
-}
-
-async function getConditions(conn) {
-  try {
-    const [rows] = await conn.execute('SELECT * FROM billing_conditions ORDER BY condition_group, id');
-    
-    // Group by condition_group
-    const conditions = {};
-    for (const row of rows) {
-      if (!conditions[row.condition_group]) {
-        conditions[row.condition_group] = [];
-      }
-      conditions[row.condition_group].push(row);
-    }
-    
-    return conditions;
-  } catch (error) {
-    console.error('Error fetching conditions:', error);
-    return {};
-  }
-}
-
-async function getItemMap(conn) {
-  try {
-    const [rows] = await conn.execute('SELECT Internal_ID, Item FROM erp_price');
-    
-    const itemMap = {};
-    for (const row of rows) {
-      itemMap[row.Internal_ID] = row.Item;
-    }
-    
-    return itemMap;
-  } catch (error) {
-    console.error('Error fetching item map:', error);
-    return {};
-  }
-}
-
-async function getLocations(conn) {
-  try {
-    const [rows] = await conn.execute('SELECT Internal_ID, Name FROM erp_location');
-    
-    const locations = {};
-    for (const row of rows) {
-      locations[row.Internal_ID] = row.Name;
-    }
-    
-    return locations;
-  } catch (error) {
-    console.error('Error fetching locations:', error);
-    return {};
   }
 }
 
@@ -862,274 +1098,6 @@ async function sendTelegramNotification(chatId, message) {
     return false;
   }
 }
-// In server.js - Add this route
-
-// Get departments for dropdown
-app.get('/api/departments', async (req, res) => {
-  try {
-    const conn = await getDbConnection();
-    
-    // Get departments from erp_deep table
-    const [departments] = await conn.execute(
-      'SELECT Name_no_hierarchy FROM erp_deep ORDER BY Name_no_hierarchy'
-    );
-    
-    await conn.end();
-    
-    res.json({
-      success: true,
-      departments
-    });
-  } catch (error) {
-    console.error('Error fetching departments:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch departments'
-    });
-  }
-});
-
-
-app.get('/api/orders/search', async (req, res) => {
-  const { q } = req.query;
-  if (!q || q.length < 2) {
-    return res.json({ results: [] });
-  }
-  const conn = await getDbConnection();
-  const [rows] = await conn.execute(
-    `SELECT netsuite_id, salesOrderNo, customerCode
-     FROM sid_v_so
-     WHERE salesOrderNo LIKE ? OR customerCode LIKE ? OR netsuite_id = ? 
-     LIMIT 10`,
-    [`%${q}%`, `%${q}%`, q]
-  );
-  await conn.end();
-  res.json({ results: rows });
-});
-
-
-// Send OTP endpoint
-app.post('/api/auth/send-otp', async (req, res) => {
-  try {
-    const { telegram_id, email, employee_id, department } = req.body;
-    
-    if (!telegram_id || !email || !employee_id || !department) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Missing required information' 
-      });
-    }
-    
-    // Validate email format
-    const emailRegex = /\S+@\S+\.\S+/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid email format' 
-      });
-    }
-    
-    // Check if user exists
-    const conn = await getDbConnection();
-    const [userRows] = await conn.execute(
-      'SELECT * FROM users WHERE telegram_id = ?',
-      [telegram_id]
-    );
-    
-    if (userRows.length === 0) {
-      await conn.end();
-      return res.status(404).json({ 
-        success: false, 
-        message: 'User not found' 
-      });
-    }
-    
-    // Generate OTP
-    const otp = otpService.generateOTP();
-    
-    // Store OTP
-    otpService.storeOTP(telegram_id, email, otp);
-    
-    // Send OTP via email
-    const emailSent = await emailService.sendOTPEmail(email, otp);
-    
-    await conn.end();
-    
-    if (emailSent) {
-      res.json({
-        success: true,
-        message: 'OTP sent successfully',
-        email: email.replace(/(.{2})(.*)(@.*)/, '$1****$3') // Mask email for privacy
-      });
-    } else {
-      res.status(500).json({
-        success: false,
-        message: 'Failed to send OTP email'
-      });
-    }
-  } catch (error) {
-    console.error('Error sending OTP:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error'
-    });
-  }
-});
-
-// Verify OTP endpoint should also use otpService.verifyOTP method
-// Update your verify-otp and resend-otp endpoints similarly
-
-// Verify OTP endpoint
-app.post('/api/auth/verify-otp', async (req, res) => {
-  try {
-    const { telegram_id, otp, email, employee_id, department } = req.body;
-    
-    if (!telegram_id || !otp || !email || !employee_id || !department) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Missing required information' 
-      });
-    }
-    
-    // Verify OTP
-    const verification = otpService.verifyOTP(telegram_id, otp);
-    
-    if (!verification.valid) {
-      return res.status(400).json({ 
-        success: false, 
-        message: verification.message 
-      });
-    }
-    
-    // Verify email matches
-    if (verification.email !== email) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email mismatch. Please request a new OTP.'
-      });
-    }
-    
-    // OTP is valid, proceed with registration
-    const conn = await getDbConnection();
-    
-    // Update user with email, employee ID, department, and mark registration as complete
-    await conn.execute(
-      'UPDATE users SET email = ?, employee_id = ?, department = ?, registration_complete = TRUE WHERE telegram_id = ?',
-      [email, employee_id, department, telegram_id]
-    );
-    
-    // Check if we can map this employee ID to a staff code
-    try {
-      // Create or update the staff_telegram_mapping table
-      const [mappingRows] = await conn.execute(
-        'SELECT * FROM staff_telegram_mapping WHERE telegram_id = ?',
-        [telegram_id]
-      );
-      
-      if (mappingRows.length === 0) {
-        // Create a new mapping
-        await conn.execute(
-          'INSERT INTO staff_telegram_mapping (telegram_id, staff_code) VALUES (?, ?)',
-          [telegram_id, employee_id]
-        );
-      } else {
-        // Update existing mapping
-        await conn.execute(
-          'UPDATE staff_telegram_mapping SET staff_code = ? WHERE telegram_id = ?',
-          [employee_id, telegram_id]
-        );
-      }
-    } catch (error) {
-      console.error('Error creating staff mapping:', error);
-      // Continue even if mapping fails - we have the essential registration data
-    }
-    
-    // Get the updated user data
-    const [updatedRows] = await conn.execute(
-      'SELECT u.*, stm.staff_code FROM users u LEFT JOIN staff_telegram_mapping stm ON u.telegram_id = stm.telegram_id WHERE u.telegram_id = ?',
-      [telegram_id]
-    );
-    
-    await conn.end();
-    
-    if (updatedRows.length === 0) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'User not found after update' 
-      });
-    }
-    
-    const user = updatedRows[0];
-    
-    const userResponse = {
-      id: user.id,
-      telegram_id: user.telegram_id,
-      first_name: user.first_name,
-      last_name: user.last_name,
-      username: user.username,
-      photo_url: user.photo_url,
-      email: user.email,
-      employee_id: user.employee_id,
-      department: user.department,
-      staff_code: user.staff_code,
-      registration_complete: user.registration_complete === 1
-    };
-    
-    res.json({
-      success: true,
-      user: userResponse
-    });
-  } catch (error) {
-    console.error('Error verifying OTP:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error'
-    });
-  }
-});
-
-// Resend OTP endpoint
-app.post('/api/auth/resend-otp', async (req, res) => {
-  try {
-    const { telegram_id, email } = req.body;
-    
-    if (!telegram_id || !email) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Missing telegram_id or email' 
-      });
-    }
-    
-    // Generate new OTP
-    const otp = otpService.generateOTP();
-    
-    // Store OTP
-    otpService.storeOTP(telegram_id, email, otp);
-    
-    // Send OTP via email
-    const emailSent = await emailService.sendOTPEmail(email, otp);
-    
-    if (emailSent) {
-      res.json({
-        success: true,
-        message: 'OTP resent successfully',
-        email: email.replace(/(.{2})(.*)(@.*)/, '$1****$3') // Mask email for privacy
-      });
-    } else {
-      res.status(500).json({
-        success: false,
-        message: 'Failed to resend OTP email'
-      });
-    }
-  } catch (error) {
-    console.error('Error resending OTP:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error'
-    });
-  }
-});
-
 
 // Start server
 app.listen(port, () => {

@@ -6,7 +6,7 @@ import RemarkModal from './RemarkModal';
 import LogsModal from './LogsModal';
 import { useAuth } from '../context/AuthContext';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+const API_URL = process.env.REACT_APP_API_URL || 'https://ppg24.tech/api';
 
 const EditOrder = () => {
   const { id } = useParams();
@@ -26,7 +26,6 @@ const EditOrder = () => {
     shipaddresslist: '',
     custbodyar_so_memo2: '',
     custbody_ar_all_memo: '',
-    custbody_ar_so_statusbill: '',
     custbody_ar_estimate_contrat1: '',
     items: []
   });
@@ -67,7 +66,6 @@ const EditOrder = () => {
           shipaddresslist: so.shipaddresslist || '',
           custbodyar_so_memo2: so.custbodyar_so_memo2 || '',
           custbody_ar_all_memo: so.custbody_ar_all_memo || '',
-          custbody_ar_so_statusbill: so.custbody_ar_so_statusbill || '',
           custbody_ar_estimate_contrat1: so.custbody_ar_estimate_contrat1 || '',
           items: response.data.items.map(item => ({
             href: item.href,
@@ -275,8 +273,8 @@ const handleSubmit = async (e) => {
                       <input
                         type="text"
                         className="form-control"
-                        name="memo"
-                        value={formData.memo}
+                        name="custbody_ar_all_memo"
+                        value={formData.custbody_ar_all_memo}
                         onChange={handleInputChange}
                       />
                     </div>
@@ -311,19 +309,17 @@ const handleSubmit = async (e) => {
                     <label className="form-label">Location:</label>
                     <div className="input-group">
                       <span className="input-group-text"><i className="bi bi-geo-alt"></i></span>
-                      <select
+                      <input
+                        type="text"
                         className="form-control"
-                        name="location_id"
-                        value={formData.location_id}
-                        onChange={handleInputChange}
-                      >
-                        <option value="">เลือกสถานที่</option>
-                        {Object.entries(locations).map(([id, name]) => (
-                          <option key={id} value={id}>{name}</option>
-                        ))}
-                      </select>
+                        value={locations[formData.location_id] || ''}
+                        readOnly
+                        tabIndex={-1}
+                        style={{ background: "#f8f9fa", cursor: "not-allowed" }}
+                      />
                     </div>
                   </div>
+
                   <div className="col-md-6 mb-3">
                     <label className="form-label">Req Inv MAC5:</label>
                     <div className="input-group">
@@ -372,7 +368,7 @@ const handleSubmit = async (e) => {
                     </div>
                   </div>
                   <div className="col-md-6 mb-3">
-                    <label className="form-label">Remark:</label>
+                    <label className="form-label">Remark: (Long Memo) </label>
                     <div className="input-group">
                       <span className="input-group-text"><i className="bi bi-chat-text"></i></span>
                       <input
@@ -386,32 +382,6 @@ const handleSubmit = async (e) => {
                   </div>
 
                   {/* ---- Additional Header Fields ---- */}
-                  <div className="col-md-6 mb-3">
-                    <label className="form-label">MEMO (แสดงบน From):</label>
-                    <div className="input-group">
-                      <span className="input-group-text"><i className="bi bi-card-text"></i></span>
-                      <input
-                        type="text"
-                        className="form-control"
-                        name="custbody_ar_all_memo"
-                        value={formData.custbody_ar_all_memo}
-                        onChange={handleInputChange}
-                      />
-                    </div>
-                  </div>
-                  <div className="col-md-6 mb-3">
-                    <label className="form-label">SO Status Bill:</label>
-                    <div className="input-group">
-                      <span className="input-group-text"><i className="bi bi-info-circle"></i></span>
-                      <input
-                        type="text"
-                        className="form-control"
-                        name="custbody_ar_so_statusbill"
-                        value={formData.custbody_ar_so_statusbill}
-                        onChange={handleInputChange}
-                      />
-                    </div>
-                  </div>
                   <div className="col-md-6 mb-3">
                     <label className="form-label">ผู้ติดต่อ:</label>
                     <div className="input-group">
@@ -526,7 +496,7 @@ const handleSubmit = async (e) => {
                                   <label className="form-label">Qty:</label>
                                   <input
                                     type="text"
-                                    className="form-control"
+                                    className="form-control text-end"
                                     value={item.quantity}
                                     onChange={e => handleItemChange(i, 'quantity', e.target.value)}
                                   />
@@ -535,7 +505,7 @@ const handleSubmit = async (e) => {
                                   <label className="form-label">Rate:</label>
                                   <input
                                     type="text"
-                                    className="form-control"
+                                    className="form-control text-end"
                                     value={item.rate}
                                     onChange={e => handleItemChange(i, 'rate', e.target.value)}
                                   />
@@ -567,7 +537,7 @@ const handleSubmit = async (e) => {
                                   <label className="form-label">Discount (formatted):</label>
                                   <input
                                     type="text"
-                                    className="form-control"
+                                    className="form-control text-end"
                                     value={item.custcol_ice_ld_discount}
                                     onChange={e => handleItemChange(i, 'custcol_ice_ld_discount', e.target.value)}
                                   />

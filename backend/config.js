@@ -23,14 +23,17 @@ module.exports = {
     host: 'itppg.com',
     user: 'misppg_db',
     password: 'JNN4ukBSUvnN2WDzLKJE',
-    database: 'misppg_db'
-  },
+    database: 'misppg_db',
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
+  }, // <-- Make sure there's a comma here
   
   // Telegram configuration
   telegram: {
-    bot_token: '7758831305:AAEHezocpKfzGuig0gqrb1gIAGHJP1i-MA4', // Replace with your actual bot token
-    bot_username: '@ppsalebuddy_bot', // Replace with your bot's username
+    bot_token: '7758831305:AAEHezocpKfzGuig0gqrb1gIAGHJP1i-MA4',
+    bot_username: '@ppsalebuddy_bot',
     notification_url: 'https://itppg.com/telegram/send_message_api.php',
-    group_chat_id: '-4774943682' // The group chat ID from your so.php
+    group_chat_id: '-4774943682'
   }
 };
