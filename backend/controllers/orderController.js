@@ -2,15 +2,28 @@ const db = require('../db');
 const config = require('../config');
 const netsuite = require('../services/netsuiteService');
 const dataService = require('../services/orderDataService');
+const orderSplitService = require('../services/orderSplitService');
 
 // GET /api/orders/staff/:staffCode
 async function getOrdersByStaff(req, res) {
   try {
     const { staffCode } = req.params;
-    const [orders] = await db.pool.query(
-      'SELECT * FROM sid_v_so WHERE staffCode = ? ORDER BY salesOrderDate DESC LIMIT 20',
-      [staffCode]
-    );
+    
+    // Enhanced query with joins to get customer name and sales rep name
+    const query = `
+      SELECT 
+        so.*,
+        cus.Name as customerName,
+        emp.Name as saleRepName
+      FROM sid_v_so so
+      LEFT JOIN erp_cus cus ON so.customerCode = cus.ID
+      LEFT JOIN erp_emp emp ON so.staffCode = emp.ID
+      WHERE so.staffCode = ? 
+      ORDER BY so.salesOrderDate DESC 
+      LIMIT 20
+    `;
+    
+    const [orders] = await db.pool.query(query, [staffCode]);
     res.json({ success: true, orders });
   } catch (error) {
     console.error('Error fetching staff orders:', error);
@@ -264,11 +277,224 @@ async function searchOrders(req, res) {
   res.json({ results: rows });
 }
 
+async function getOrderSplits(req, res) {
+  try {
+    const orderId = req.params.id;
+    const splits = await orderSplitService.getSplitOrderHistory(orderId);
+    
+    res.json({
+      success: true,
+      splits
+    });
+  } catch (error) {
+    console.error('Error fetching order splits:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch split history' 
+    });
+  }
+}
+
+// GET /api/order/:id/family - Get parent and all child orders
+async function getOrderFamily(req, res) {
+  try {
+    const orderId = req.params.id;
+    
+    // Get split history
+    const splits = await orderSplitService.getSplitOrderHistory(orderId);
+    
+    // Determine all related order IDs
+    const relatedOrderIds = new Set();
+    splits.forEach(split => {
+      relatedOrderIds.add(split.parent_order_id);
+      relatedOrderIds.add(split.child_order_id);
+    });
+    
+    // Remove the current order ID and fetch details for related orders
+    relatedOrderIds.delete(parseInt(orderId));
+    const relatedOrders = [];
+    
+    for (const relatedId of relatedOrderIds) {
+      try {
+        const so = await netsuite.fetchSalesOrder(relatedId);
+        const items = await netsuite.fetchOrderItems(relatedId);
+        const venioSONumber = await dataService.getVenioSONumber(relatedId);
+        
+        relatedOrders.push({
+          orderId: relatedId,
+          so,
+          items,
+          venioSONumber
+        });
+      } catch (error) {
+        console.error(`Error fetching related order ${relatedId}:`, error);
+      }
+    }
+    
+    res.json({
+      success: true,
+      splits,
+      relatedOrders
+    });
+  } catch (error) {
+    console.error('Error fetching order family:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch order family' 
+    });
+  }
+}
+async function splitOrder(req, res) {
+  try {
+    const orderId = req.params.id;
+    const { splitItems, createdBy } = req.body;
+
+    if (!splitItems || !Array.isArray(splitItems) || splitItems.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'No items provided for split order' 
+      });
+    }
+
+    // Validate split items
+    for (const item of splitItems) {
+      if (!item.item_id || !item.quantity || parseFloat(item.quantity) <= 0) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Invalid item data in split request' 
+        });
+      }
+    }
+
+    const result = await orderSplitService.createSplitOrder(
+      orderId, 
+      splitItems, 
+      createdBy
+    );
+
+    if (result.success) {
+      // Log the split operation
+      console.log(`Split order created: ${result.newOrderNumber} from parent ${orderId}`);
+      
+      res.json({
+        success: true,
+        message: result.message,
+        newOrderId: result.newOrderId,
+        newOrderNumber: result.newOrderNumber
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to create split order'
+      });
+    }
+  } catch (error) {
+    console.error('Error in splitOrder:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || 'Server error while creating split order' 
+    });
+  }
+}
+
+async function getAllOrders(req, res) {
+  try {
+    const { staffCode, status, startDate, endDate } = req.query;
+    
+    let query = `
+      SELECT 
+        so.*,
+        cus.Name as customerName,
+        emp.Name as saleRepName,
+        emp.ID as staffId
+      FROM sid_v_so so
+      LEFT JOIN erp_cus cus ON so.customerCode = cus.ID
+      LEFT JOIN erp_emp emp ON so.staffCode = emp.ID
+      WHERE 1=1
+    `;
+    
+    const params = [];
+    
+    // Add filters
+    if (staffCode && staffCode !== 'all') {
+      query += ' AND so.staffCode = ?';
+      params.push(staffCode);
+    }
+    
+    if (status && status !== 'all') {
+      query += ' AND so.status = ?';
+      params.push(status);
+    }
+    
+    if (startDate) {
+      query += ' AND DATE(so.salesOrderDate) >= ?';
+      params.push(startDate);
+    }
+    
+    if (endDate) {
+      query += ' AND DATE(so.salesOrderDate) <= ?';
+      params.push(endDate);
+    }
+    
+    query += ' ORDER BY so.salesOrderDate DESC LIMIT 100';
+    
+    const [orders] = await db.pool.query(query, params);
+    res.json({ success: true, orders });
+  } catch (error) {
+    console.error('Error fetching all orders:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch orders' });
+  }
+}
+
+// GET /api/filters/staff - Get all staff for filter dropdown
+async function getStaffList(req, res) {
+  try {
+    const query = `
+      SELECT DISTINCT 
+        emp.ID as staffCode,
+        emp.Name as staffName
+      FROM erp_emp emp
+      INNER JOIN sid_v_so so ON emp.ID = so.staffCode
+      ORDER BY emp.Name
+    `;
+    
+    const [staff] = await db.pool.query(query);
+    res.json({ success: true, staff });
+  } catch (error) {
+    console.error('Error fetching staff list:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch staff list' });
+  }
+}
+
+// GET /api/filters/status - Get all statuses for filter dropdown
+async function getStatusList(req, res) {
+  try {
+    const query = `
+      SELECT DISTINCT status
+      FROM sid_v_so
+      WHERE status IS NOT NULL AND status != ''
+      ORDER BY status
+    `;
+    
+    const [statuses] = await db.pool.query(query);
+    res.json({ success: true, statuses: statuses.map(s => s.status) });
+  } catch (error) {
+    console.error('Error fetching status list:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch status list' });
+  }
+}
+
 module.exports = {
   getOrdersByStaff,
   getOrderDetails,
   updateOrder,
   respondOrder,
   getDepartments,
-  searchOrders
+  searchOrders,
+  splitOrder,           // New
+  getOrderSplits,       // New
+  getOrderFamily,
+  getAllOrders,        // New
+  getStaffList,        // New  
+  getStatusList,
 };
