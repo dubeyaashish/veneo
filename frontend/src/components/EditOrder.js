@@ -402,20 +402,6 @@ const handleSubmit = async (e) => {
                       />
                     </div>
                   </div>
-                  <div className="col-md-6 mb-3">
-                    <label className="form-label">แจ้งเตือนไปยังแผนก:</label>
-                    <select
-                      multiple
-                      className="form-control"
-                      value={selectedDepartments}
-                      onChange={handleDepartmentChange}
-                    >
-                      {departments.map((dept, idx) => (
-                        <option key={idx} value={dept}>{dept}</option>
-                      ))}
-                    </select>
-                    <small className="text-muted">กด Ctrl หรือ Command เพื่อเลือกหลายแผนก</small>
-                  </div>
 
                   {/* ---- Additional Header Fields ---- */}
                   <div className="col-md-6 mb-3">
