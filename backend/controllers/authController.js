@@ -44,6 +44,7 @@ async function authenticateTelegram(req, res) {
       email: user.email,
       employee_id: user.employee_id,
       staff_code: staffRows.length > 0 ? staffRows[0].staff_code : null,
+      department: user.department,
       registration_complete: isNewUser ? false : user.registration_complete === 1
     };
 

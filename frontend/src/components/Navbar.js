@@ -2,9 +2,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-
 const Navbar = () => {
   const { currentUser, logout } = useAuth();
+  console.log("CurrentUser in Navbar:", currentUser);
   const navigate = useNavigate();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
@@ -60,6 +60,13 @@ const Navbar = () => {
                     <i className="bi bi-question-circle"></i> ช่วยเหลือ
                   </Link>
                 </li>
+                {currentUser && currentUser.department?.trim() === 'M180101 แผนกประสานงานขาย' && (
+                  <li className="nav-item">
+                    <Link className="nav-link" to="/response/1">
+                      <i className="bi bi-people"></i> ไปหน้าประสานงานขาย
+                    </Link>
+                  </li>
+              )}
               </>
             ) : (
               <li className="nav-item">

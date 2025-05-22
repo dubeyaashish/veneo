@@ -484,6 +484,209 @@ async function getStatusList(req, res) {
   }
 }
 
+// Simple split logic - exactly like you described
+// Fixed split logic - remove any item with 0 quantity
+async function createSplitOrder(req, res) {
+  try {
+    const { originalOrderId, items: splitItems, updatedBy } = req.body;
+
+    console.log('Creating split order from original:', originalOrderId);
+    console.log('Split items:', splitItems);
+
+    if (!splitItems || splitItems.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'No items provided for split order' 
+      });
+    }
+
+    // Get the original order data
+    const originalSO = await netsuite.fetchSalesOrder(originalOrderId);
+    const originalItems = await netsuite.fetchOrderItems(originalOrderId);
+    console.log('Original order fetched:', originalSO.id);
+
+    const logs = [];
+
+    // Filter out items with 0 quantity from split items
+    const validSplitItems = splitItems.filter(item => {
+      const qty = parseFloat(item.quantity);
+      if (qty <= 0) {
+        console.log(`Skipping item ${item.item_id} - quantity is ${qty}`);
+        logs.push(`⚠️ Skipped item ${item.item_id} - quantity is 0 or negative`);
+        return false;
+      }
+      return true;
+    });
+
+    if (validSplitItems.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'No valid items with quantity > 0 to split' 
+      });
+    }
+
+    console.log(`Valid split items: ${validSplitItems.length} out of ${splitItems.length}`);
+
+    // Step 1: Create child order with valid split items
+    console.log('Step 1: Creating child order with valid items...');
+    
+    const childOrderData = {
+      entity: { id: Number(originalSO.entity?.id || originalSO.entity) },
+      memo: `${originalSO.memo || ''} - Split Order`,
+      otherRefNum: `${originalSO.otherRefNum || ''}-SPLIT`,
+      tranDate: originalSO.tranDate,
+      ...(originalSO.location && { location: { id: Number(originalSO.location.id || originalSO.location) } }),
+      ...(originalSO.custbody_ar_req_inv_mac5 && { custbody_ar_req_inv_mac5: originalSO.custbody_ar_req_inv_mac5 }),
+      ...(originalSO.shipaddresslist && { shipaddresslist: originalSO.shipaddresslist }),
+      custbodyar_so_memo2: `Split from SO ${originalOrderId}`,
+      custbody_ar_all_memo: `${originalSO.custbody_ar_all_memo || ''} - Split Order`,
+      ...(originalSO.custbody_ar_so_statusbill && { custbody_ar_so_statusbill: originalSO.custbody_ar_so_statusbill }),
+      ...(originalSO.custbody_ar_estimate_contrat1 && { custbody_ar_estimate_contrat1: originalSO.custbody_ar_estimate_contrat1 }),
+      
+      // Include only valid items (quantity > 0) in the creation
+      item: validSplitItems.map(item => ({
+        item: { id: Number(item.item_id) },
+        quantity: Number(item.quantity),
+        rate: Number(item.rate),
+        description: item.description || '',
+        ...(item.location && { inventorylocation: { id: Number(item.location) } }),
+        ...(item.custcol_ice_ld_discount && { custcol_ice_ld_discount: Number(item.custcol_ice_ld_discount) }),
+        ...(item.inpt_units_11 && { inpt_units_11: item.inpt_units_11 })
+      }))
+    };
+
+    console.log('Child order data:', JSON.stringify(childOrderData, null, 2));
+
+    // Create the child order
+    const createOrderUrl = `${config.base_url}/salesOrder`;
+    const authHeader = netsuite.buildOAuthHeader(
+      createOrderUrl,
+      'POST',
+      config.consumer_key,
+      config.consumer_secret,
+      config.token,
+      config.token_secret,
+      config.realm
+    );
+
+    const response = await require('axios').post(createOrderUrl, childOrderData, {
+      headers: { 
+        Authorization: authHeader, 
+        'Content-Type': 'application/json' 
+      }
+    });
+
+    const newOrderId = response.data.id;
+    console.log('Child order created with ID:', newOrderId);
+    logs.push(`✅ Created child order: ${newOrderId} with ${validSplitItems.length} items`);
+
+    // Step 2: Update parent order - reduce quantities or remove items with 0 quantity
+    console.log('Step 2: Updating parent order...');
+    
+    for (const splitItem of validSplitItems) {
+      const originalItem = originalItems.find(item => 
+        item.item?.id == splitItem.item_id
+      );
+      
+      if (originalItem) {
+        const originalQty = parseFloat(originalItem.quantity);
+        const splitQty = parseFloat(splitItem.quantity);
+        const newQuantity = originalQty - splitQty;
+        
+        console.log(`Item ${splitItem.item_id}: ${originalQty} - ${splitQty} = ${newQuantity}`);
+        
+        if (newQuantity > 0) {
+          // Update quantity in parent order
+          try {
+            const updateData = { quantity: newQuantity };
+            await netsuite.updateOrderItem(originalItem.href, updateData);
+            logs.push(`✅ Updated parent item ${splitItem.item_id}: ${originalQty} -> ${newQuantity}`);
+          } catch (updateError) {
+            console.error('Error updating item:', updateError);
+            logs.push(`❌ Failed to update parent item ${splitItem.item_id}`);
+          }
+        } else {
+          // Remove item from parent order (quantity is 0 or negative)
+          try {
+            const deleteAuthHeader = netsuite.buildOAuthHeader(
+              originalItem.href,
+              'DELETE',
+              config.consumer_key,
+              config.consumer_secret,
+              config.token,
+              config.token_secret,
+              config.realm
+            );
+            
+            await require('axios').delete(originalItem.href, {
+              headers: { Authorization: deleteAuthHeader }
+            });
+            logs.push(`✅ Removed item ${splitItem.item_id} from parent (quantity = ${newQuantity})`);
+          } catch (deleteError) {
+            console.error('Error deleting item:', deleteError);
+            logs.push(`❌ Failed to remove parent item ${splitItem.item_id}`);
+          }
+        }
+      } else {
+        logs.push(`⚠️ Item ${splitItem.item_id} not found in original order`);
+      }
+    }
+
+    // Record the split relationship in database
+    try {
+      await db.pool.query(
+        'INSERT INTO order_splits (parent_order_id, child_order_id, split_reason, created_by) VALUES (?, ?, ?, ?)',
+        [originalOrderId, newOrderId, 'Order split', updatedBy || null]
+      );
+      logs.push('✅ Split relationship recorded');
+    } catch (dbError) {
+      console.error('Database error:', dbError);
+      logs.push('⚠️ Split created but not recorded in database');
+    }
+
+    // Send notifications
+    try {
+      const soUrl = `https://ppg24.tech/order/${newOrderId}`;
+      const message = `✅ New Split Order Created: ${newOrderId}\n🔗 Link: ${soUrl}`;
+      
+      const [coordUsers] = await db.pool.query(
+        "SELECT telegram_id FROM users WHERE department = 'M180101 แผนกประสานงานขาย' AND registration_complete = 1"
+      );
+      
+      if (coordUsers.length > 0) {
+        let successCount = 0;
+        for (const user of coordUsers) {
+          if (user.telegram_id) {
+            const result = await netsuite.sendTelegramMessage(user.telegram_id, message);
+            if (result) successCount++;
+          }
+        }
+        if (successCount > 0) logs.push(`✅ Notified coordination department (${successCount} people)`);
+      }
+    } catch (err) {
+      console.error('Error sending notifications:', err);
+      logs.push('❌ Error sending notifications');
+    }
+
+    res.json({ 
+      success: true, 
+      newOrderId, 
+      logs,
+      message: `Split order ${newOrderId} created successfully with ${validSplitItems.length} items`
+    });
+
+  } catch (error) {
+    console.error('Error creating split order:', error);
+    console.error('Error response:', error.response?.data);
+    
+    res.status(500).json({ 
+      success: false, 
+      message: error.response?.data?.message || error.message,
+      details: error.response?.data
+    });
+  }
+}
+
 module.exports = {
   getOrdersByStaff,
   getOrderDetails,
@@ -497,4 +700,5 @@ module.exports = {
   getAllOrders,        // New
   getStaffList,        // New  
   getStatusList,
+  createSplitOrder,
 };

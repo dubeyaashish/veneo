@@ -1,12 +1,14 @@
-// frontend/src/components/OrderSplit.js
+// frontend/src/components/OrderSplit.js - Using same endpoint as EditOrder.js
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Alert } from 'react-bootstrap';
 import { toast } from 'react-toastify';
 import axios from 'axios';
+import { useParams } from 'react-router-dom';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }) => {
+  const { id } = useParams(); // Get the order ID from URL params
   const [originalItems, setOriginalItems] = useState([]);
   const [splitItems, setSplitItems] = useState([]);
   const [creating, setCreating] = useState(false);
@@ -14,13 +16,19 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
 
   useEffect(() => {
     if (show && orderDetails?.items) {
-      // Initialize original items with current quantities
+      // Initialize original items with current quantities - same structure as EditOrder.js
       const items = orderDetails.items.map((item, index) => ({
-        ...item,
-        originalIndex: index,
-        currentQuantity: parseFloat(item.quantity || 0),
+        href: item.href,
+        item_id: item.item?.id || '',
+        quantity: parseFloat(item.quantity || 0),
         originalQuantity: parseFloat(item.quantity || 0),
-        item_display: orderDetails.itemMap[item.item?.id] || item.item?.id || `Item ${index + 1}`
+        rate: item.rate || '',
+        description: item.description || '',
+        location: item.inventorylocation?.id || '',
+        custcol_ice_ld_discount: item.custcol_ice_ld_discount || '',
+        inpt_units_11: item.inpt_units_11 || '',
+        item_display: orderDetails.itemMap[item.item?.id] || item.item?.id || `Item ${index + 1}`,
+        originalIndex: index
       }));
       
       setOriginalItems(items);
@@ -36,7 +44,7 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
         if (idx === itemIndex) {
           const maxAllowed = item.originalQuantity - getSplitQuantityForItem(item.originalIndex);
           const clampedQuantity = Math.min(Math.max(0, quantity), maxAllowed);
-          return { ...item, currentQuantity: clampedQuantity };
+          return { ...item, quantity: clampedQuantity };
         }
         return item;
       }));
@@ -44,9 +52,9 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
       setSplitItems(prev => prev.map((item, idx) => {
         if (idx === itemIndex) {
           const originalItem = originalItems[item.originalIndex];
-          const maxAllowed = originalItem.originalQuantity - originalItem.currentQuantity;
+          const maxAllowed = originalItem.originalQuantity - originalItem.quantity;
           const clampedQuantity = Math.min(Math.max(0, quantity), maxAllowed);
-          return { ...item, currentQuantity: clampedQuantity };
+          return { ...item, quantity: clampedQuantity };
         }
         return item;
       }));
@@ -56,12 +64,12 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
   const getSplitQuantityForItem = (originalIndex) => {
     return splitItems
       .filter(item => item.originalIndex === originalIndex)
-      .reduce((sum, item) => sum + item.currentQuantity, 0);
+      .reduce((sum, item) => sum + item.quantity, 0);
   };
 
   const transferToSplit = (originalIndex, transferQuantity = null) => {
     const originalItem = originalItems[originalIndex];
-    const availableQuantity = originalItem.currentQuantity;
+    const availableQuantity = originalItem.quantity;
     const quantity = transferQuantity || Math.min(1, availableQuantity);
     
     if (quantity <= 0 || quantity > availableQuantity) return;
@@ -73,22 +81,22 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
       // Update existing split item
       setSplitItems(prev => prev.map((item, idx) => {
         if (idx === existingSplitIndex) {
-          return { ...item, currentQuantity: item.currentQuantity + quantity };
+          return { ...item, quantity: item.quantity + quantity };
         }
         return item;
       }));
     } else {
-      // Add new split item
+      // Add new split item - same structure as EditOrder.js items
       setSplitItems(prev => [...prev, {
         ...originalItem,
-        currentQuantity: quantity
+        quantity: quantity
       }]);
     }
 
     // Reduce original item quantity
     setOriginalItems(prev => prev.map((item, idx) => {
       if (idx === originalIndex) {
-        return { ...item, currentQuantity: item.currentQuantity - quantity };
+        return { ...item, quantity: item.quantity - quantity };
       }
       return item;
     }));
@@ -96,14 +104,14 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
 
   const transferToOriginal = (splitIndex, transferQuantity = null) => {
     const splitItem = splitItems[splitIndex];
-    const quantity = transferQuantity || Math.min(1, splitItem.currentQuantity);
+    const quantity = transferQuantity || Math.min(1, splitItem.quantity);
     
-    if (quantity <= 0 || quantity > splitItem.currentQuantity) return;
+    if (quantity <= 0 || quantity > splitItem.quantity) return;
 
     // Increase original item quantity
     setOriginalItems(prev => prev.map((item, idx) => {
       if (idx === splitItem.originalIndex) {
-        return { ...item, currentQuantity: item.currentQuantity + quantity };
+        return { ...item, quantity: item.quantity + quantity };
       }
       return item;
     }));
@@ -111,12 +119,12 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
     // Reduce or remove split item
     setSplitItems(prev => {
       const newSplitItems = [...prev];
-      if (newSplitItems[splitIndex].currentQuantity <= quantity) {
+      if (newSplitItems[splitIndex].quantity <= quantity) {
         newSplitItems.splice(splitIndex, 1);
       } else {
         newSplitItems[splitIndex] = {
           ...newSplitItems[splitIndex],
-          currentQuantity: newSplitItems[splitIndex].currentQuantity - quantity
+          quantity: newSplitItems[splitIndex].quantity - quantity
         };
       }
       return newSplitItems;
@@ -164,25 +172,62 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
     try {
       setCreating(true);
       
-      const splitData = splitItems.map(item => ({
-        item_id: item.item?.id,
-        quantity: item.currentQuantity,
-        rate: item.rate,
-        description: item.description,
-        location: item.inventorylocation?.id,
-        custcol_ice_ld_discount: item.custcol_ice_ld_discount,
-        inpt_units_11: item.inpt_units_11
-      }));
+      // First, update the original order with reduced quantities - same as EditOrder.js
+      const originalUpdatePayload = {
+        // Copy all header fields from orderDetails.so
+        memo: orderDetails.so.memo || '',
+        otherrefnum: orderDetails.so.otherRefNum || '',
+        tranDate: orderDetails.so.tranDate ? orderDetails.so.tranDate.substring(0, 10) : '',
+        location_id: orderDetails.so.location?.id || '',
+        custbody_ar_req_inv_mac5: orderDetails.so.custbody_ar_req_inv_mac5 || '',
+        shipaddresslist: orderDetails.so.shipaddresslist || '',
+        custbodyar_so_memo2: orderDetails.so.custbodyar_so_memo2 || '',
+        custbody_ar_all_memo: orderDetails.so.custbody_ar_all_memo || '',
+        custbody_ar_so_statusbill: orderDetails.so.custbody_ar_so_statusbill || '',
+        custbody_ar_estimate_contrat1: orderDetails.so.custbody_ar_estimate_contrat1 || '',
+        items: originalItems, // Updated quantities
+        selectedDepartments: [],
+        updatedBy: currentUser?.telegram_id
+      };
 
-      const response = await axios.post(`${API_URL}/order/${orderDetails.so.id}/split`, {
-        splitItems: splitData,
-        createdBy: currentUser?.telegram_id
-      });
+      console.log('Updating original order with reduced quantities...');
+      const originalUpdateResponse = await axios.post(`${API_URL}/order/${id}/update`, originalUpdatePayload);
+      
+      if (originalUpdateResponse.data.success) {
+        console.log('Original order updated successfully');
+        
+        // Now create the split order - same structure but with split items
+        const splitOrderPayload = {
+          // Same header fields but with modified memo
+          memo: `${orderDetails.so.memo || ''} - Split Order`,
+          otherrefnum: `${orderDetails.so.otherRefNum || ''}-SPLIT`,
+          tranDate: orderDetails.so.tranDate ? orderDetails.so.tranDate.substring(0, 10) : '',
+          location_id: orderDetails.so.location?.id || '',
+          custbody_ar_req_inv_mac5: orderDetails.so.custbody_ar_req_inv_mac5 || '',
+          shipaddresslist: orderDetails.so.shipaddresslist || '',
+          custbodyar_so_memo2: `Split from SO ${id}`,
+          custbody_ar_all_memo: `${orderDetails.so.custbody_ar_all_memo || ''} - Split Order`,
+          custbody_ar_so_statusbill: orderDetails.so.custbody_ar_so_statusbill || '',
+          custbody_ar_estimate_contrat1: orderDetails.so.custbody_ar_estimate_contrat1 || '',
+          items: splitItems, // Only the split items
+          selectedDepartments: [],
+          updatedBy: currentUser?.telegram_id,
+          isNewOrder: true, // Flag to indicate this should create a new order
+          originalOrderId: id // Reference to the original order
+        };
 
-      if (response.data.success) {
-        toast.success(response.data.message);
-        onSplitComplete(response.data);
-        onHide();
+        console.log('Creating split order...');
+        const splitOrderResponse = await axios.post(`${API_URL}/order/split/create`, splitOrderPayload);
+        
+        if (splitOrderResponse.data.success) {
+          toast.success(`Split order created successfully! New Order ID: ${splitOrderResponse.data.newOrderId}`);
+          onSplitComplete(splitOrderResponse.data);
+          onHide();
+        } else {
+          toast.error(splitOrderResponse.data.message || 'Failed to create split order');
+        }
+      } else {
+        toast.error('Failed to update original order');
       }
     } catch (error) {
       console.error('Error creating split order:', error);
@@ -199,7 +244,7 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
       <Modal.Header closeButton>
         <Modal.Title>
           <i className="bi bi-scissors me-2"></i>
-          Split Sales Order #{orderDetails?.so?.id}
+          Split Sales Order #{id}
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
@@ -210,7 +255,7 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
               <div className="card-header bg-primary text-white">
                 <h6 className="mb-0">
                   <i className="bi bi-file-earmark-text me-2"></i>
-                  Original Order Items
+                  Original Order Items (Remaining)
                 </h6>
               </div>
               <div 
@@ -231,7 +276,7 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
                       <div className="d-flex justify-content-between align-items-center mb-2">
                         <strong className="text-truncate me-2">{item.item_display}</strong>
                         <span className="badge bg-secondary">
-                          {item.currentQuantity}/{item.originalQuantity}
+                          {item.quantity}/{item.originalQuantity}
                         </span>
                       </div>
                       <p className="text-muted small mb-2">{item.description}</p>
@@ -243,13 +288,13 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
                           min="0"
                           max={item.originalQuantity - getSplitQuantityForItem(item.originalIndex)}
                           step="0.01"
-                          value={item.currentQuantity}
+                          value={item.quantity}
                           onChange={(e) => handleQuantityChange(index, e.target.value, true)}
                         />
                         <button
                           className="btn btn-outline-primary btn-sm"
                           onClick={() => transferToSplit(index)}
-                          disabled={item.currentQuantity <= 0}
+                          disabled={item.quantity <= 0}
                           title="Transfer 1 unit to split order"
                         >
                           <i className="bi bi-arrow-right"></i>
@@ -295,7 +340,7 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
                         <div className="d-flex justify-content-between align-items-center mb-2">
                           <strong className="text-truncate me-2">{item.item_display}</strong>
                           <span className="badge bg-success">
-                            {item.currentQuantity}
+                            {item.quantity}
                           </span>
                         </div>
                         <p className="text-muted small mb-2">{item.description}</p>
@@ -303,7 +348,7 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
                           <button
                             className="btn btn-outline-success btn-sm"
                             onClick={() => transferToOriginal(index)}
-                            disabled={item.currentQuantity <= 0}
+                            disabled={item.quantity <= 0}
                             title="Transfer 1 unit back to original"
                           >
                             <i className="bi bi-arrow-left"></i>
@@ -315,7 +360,7 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
                             min="0"
                             max={item.originalQuantity}
                             step="0.01"
-                            value={item.currentQuantity}
+                            value={item.quantity}
                             onChange={(e) => handleQuantityChange(index, e.target.value, false)}
                           />
                         </div>
