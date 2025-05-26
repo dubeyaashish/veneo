@@ -484,8 +484,7 @@ async function getStatusList(req, res) {
   }
 }
 
-// Simple split logic - exactly like you described
-// Fixed split logic - remove any item with 0 quantity
+// Replace createSplitOrder function - using EXACT PHP webhook structure
 async function createSplitOrder(req, res) {
   try {
     const { originalOrderId, items: splitItems, updatedBy } = req.body;
@@ -507,12 +506,11 @@ async function createSplitOrder(req, res) {
 
     const logs = [];
 
-    // Filter out items with 0 quantity from split items
+    // Filter valid split items
     const validSplitItems = splitItems.filter(item => {
       const qty = parseFloat(item.quantity);
       if (qty <= 0) {
-        console.log(`Skipping item ${item.item_id} - quantity is ${qty}`);
-        logs.push(`⚠️ Skipped item ${item.item_id} - quantity is 0 or negative`);
+        logs.push(`⚠️ Skipped item ${item.item_id} - quantity is ${qty}`);
         return false;
       }
       return true;
@@ -527,37 +525,73 @@ async function createSplitOrder(req, res) {
 
     console.log(`Valid split items: ${validSplitItems.length} out of ${splitItems.length}`);
 
-    // Step 1: Create child order with valid split items
-    console.log('Step 1: Creating child order with valid items...');
+    // Step 1: Prepare NetSuite items in EXACT PHP format
+    const netsuiteItems = validSplitItems.map(item => ({
+      'item': { 'id': parseInt(item.item_id) },
+      'quantity': parseFloat(item.quantity),
+      'rate': parseFloat(item.rate),
+      'description': item.description || '',
+      'inventorylocation': { 'id': parseInt(item.location) || 18 },
+      ...(item.custcol_ice_ld_discount && { 'custcol_ice_ld_discount': parseFloat(item.custcol_ice_ld_discount) }),
+      ...(item.inpt_units_11 && { 'inpt_units_11': item.inpt_units_11 })
+    }));
+
+    // Step 2: Build NetSuite payload using EXACT PHP webhook structure
+    console.log('Step 2: Creating child order using PHP webhook structure...');
     
-    const childOrderData = {
-      entity: { id: Number(originalSO.entity?.id || originalSO.entity) },
-      memo: `${originalSO.memo || ''} - Split Order`,
-      otherRefNum: `${originalSO.otherRefNum || ''}-SPLIT`,
-      tranDate: originalSO.tranDate,
-      ...(originalSO.location && { location: { id: Number(originalSO.location.id || originalSO.location) } }),
-      ...(originalSO.custbody_ar_req_inv_mac5 && { custbody_ar_req_inv_mac5: originalSO.custbody_ar_req_inv_mac5 }),
-      ...(originalSO.shipaddresslist && { shipaddresslist: originalSO.shipaddresslist }),
-      custbodyar_so_memo2: `Split from SO ${originalOrderId}`,
-      custbody_ar_all_memo: `${originalSO.custbody_ar_all_memo || ''} - Split Order`,
-      ...(originalSO.custbody_ar_so_statusbill && { custbody_ar_so_statusbill: originalSO.custbody_ar_so_statusbill }),
-      ...(originalSO.custbody_ar_estimate_contrat1 && { custbody_ar_estimate_contrat1: originalSO.custbody_ar_estimate_contrat1 }),
+    // Calculate totals (simplified - you might want to make this more sophisticated)
+    const subtotal = validSplitItems.reduce((sum, item) => 
+      sum + (parseFloat(item.quantity) * parseFloat(item.rate)), 0
+    );
+    
+    const nsPayload = {
+      // Core fields - EXACT format from PHP
+      'entity': { 'id': originalSO.entity?.id || originalSO.entity },
+      'tranDate': originalSO.tranDate ? originalSO.tranDate.substring(0, 10) : new Date().toISOString().substring(0, 10),
       
-      // Include only valid items (quantity > 0) in the creation
-      item: validSplitItems.map(item => ({
-        item: { id: Number(item.item_id) },
-        quantity: Number(item.quantity),
-        rate: Number(item.rate),
-        description: item.description || '',
-        ...(item.location && { inventorylocation: { id: Number(item.location) } }),
-        ...(item.custcol_ice_ld_discount && { custcol_ice_ld_discount: Number(item.custcol_ice_ld_discount) }),
-        ...(item.inpt_units_11 && { inpt_units_11: item.inpt_units_11 })
-      }))
+      // Department as integer (from PHP: 'department' => 23)
+      'department': originalSO.department?.id || originalSO.department || 23,
+      
+      // Field names matching PHP exactly
+      'otherrefnum': (originalSO.otherRefNum || '') + '-SPLIT',
+      'salesrep': originalSO.salesRep?.id || originalSO.salesRep,
+      'memo': (originalSO.memo || '') + ' - Split Order',
+      
+      // Custom fields - exact names from PHP
+      'custbody_ar_req_inv_mac5': originalSO.custbody_ar_req_inv_mac5 || '',
+      'custbody_po_shipmentby': '',
+      
+      // Ship date (from PHP: next day)
+      'shipdate': originalSO.tranDate ? 
+        new Date(new Date(originalSO.tranDate).getTime() + 24*60*60*1000).toISOString().substring(0, 10) :
+        new Date(Date.now() + 24*60*60*1000).toISOString().substring(0, 10),
+      
+      // Discount fields (simplified for split order)
+      'discountitem': -6,
+      'discountrate': 0,
+      'discounttotal': 0,
+      'taxtotal': 0,
+      'subtotal': subtotal,
+      
+      // CRITICAL: Items structure exactly like PHP
+      'item': { 'items': netsuiteItems },
+      
+      // Location as object with id
+      'location': { 'id': originalSO.location?.id || '18' },
+      
+      // Additional custom fields
+      'custbody_ar_all_memo': (originalSO.custbody_ar_all_memo || '') + ' - Split Order',
+      'custbodyar_so_memo2': `Split from SO ${originalOrderId}`,
+      
+      // Copy other custom fields if they exist
+      ...(originalSO.custbody_ar_so_statusbill && { 'custbody_ar_so_statusbill': originalSO.custbody_ar_so_statusbill }),
+      ...(originalSO.custbody_ar_estimate_contrat1 && { 'custbody_ar_estimate_contrat1': originalSO.custbody_ar_estimate_contrat1 }),
+      ...(originalSO.shipaddresslist && { 'shipaddresslist': originalSO.shipaddresslist })
     };
 
-    console.log('Child order data:', JSON.stringify(childOrderData, null, 2));
+    console.log('NetSuite payload (PHP style):', JSON.stringify(nsPayload, null, 2));
 
-    // Create the child order
+    // Step 3: Create the order in NetSuite using exact PHP method
     const createOrderUrl = `${config.base_url}/salesOrder`;
     const authHeader = netsuite.buildOAuthHeader(
       createOrderUrl,
@@ -569,9 +603,9 @@ async function createSplitOrder(req, res) {
       config.realm
     );
 
-    const response = await require('axios').post(createOrderUrl, childOrderData, {
+    const response = await require('axios').post(createOrderUrl, nsPayload, {
       headers: { 
-        Authorization: authHeader, 
+        'Authorization': authHeader, 
         'Content-Type': 'application/json' 
       }
     });
@@ -580,12 +614,12 @@ async function createSplitOrder(req, res) {
     console.log('Child order created with ID:', newOrderId);
     logs.push(`✅ Created child order: ${newOrderId} with ${validSplitItems.length} items`);
 
-    // Step 2: Update parent order - reduce quantities or remove items with 0 quantity
-    console.log('Step 2: Updating parent order...');
+    // Step 4: Update parent order - reduce quantities or remove items
+    console.log('Step 4: Updating parent order...');
     
     for (const splitItem of validSplitItems) {
       const originalItem = originalItems.find(item => 
-        item.item?.id == splitItem.item_id
+        Number(item.item?.id) === Number(splitItem.item_id)
       );
       
       if (originalItem) {
@@ -603,7 +637,7 @@ async function createSplitOrder(req, res) {
             logs.push(`✅ Updated parent item ${splitItem.item_id}: ${originalQty} -> ${newQuantity}`);
           } catch (updateError) {
             console.error('Error updating item:', updateError);
-            logs.push(`❌ Failed to update parent item ${splitItem.item_id}`);
+            logs.push(`❌ Failed to update parent item ${splitItem.item_id}: ${updateError.message}`);
           }
         } else {
           // Remove item from parent order (quantity is 0 or negative)
@@ -624,7 +658,7 @@ async function createSplitOrder(req, res) {
             logs.push(`✅ Removed item ${splitItem.item_id} from parent (quantity = ${newQuantity})`);
           } catch (deleteError) {
             console.error('Error deleting item:', deleteError);
-            logs.push(`❌ Failed to remove parent item ${splitItem.item_id}`);
+            logs.push(`❌ Failed to remove parent item ${splitItem.item_id}: ${deleteError.message}`);
           }
         }
       } else {
@@ -632,23 +666,30 @@ async function createSplitOrder(req, res) {
       }
     }
 
-    // Record the split relationship in database
+    // Step 5: Record the split relationship in database
     try {
       await db.pool.query(
         'INSERT INTO order_splits (parent_order_id, child_order_id, split_reason, created_by) VALUES (?, ?, ?, ?)',
         [originalOrderId, newOrderId, 'Order split', updatedBy || null]
       );
-      logs.push('✅ Split relationship recorded');
+      logs.push('✅ Split relationship recorded in database');
     } catch (dbError) {
       console.error('Database error:', dbError);
-      logs.push('⚠️ Split created but not recorded in database');
+      logs.push('⚠️ Split created but failed to record in database: ' + dbError.message);
     }
 
-    // Send notifications
+    // Step 6: Send notifications (same as PHP webhook)
     try {
-      const soUrl = `https://ppg24.tech/order/${newOrderId}`;
-      const message = `✅ New Split Order Created: ${newOrderId}\n🔗 Link: ${soUrl}`;
+      const netsuiteLink = `${config.accounting_url}${newOrderId}`;
+      const editLink = `https://ppg24.tech/order/${newOrderId}`;
       
+      const message = `🆕 Split Order สร้างเรียบร้อย: Split Order\n` +
+                     `📝 New SO ID: ${newOrderId}\n` +
+                     `🔗 NetSuite: ${netsuiteLink}\n` +
+                     `✏️ แก้ไข: ${editLink}\n` +
+                     `📊 Original SO: ${originalOrderId}`;
+      
+      // Send to coordination department
       const [coordUsers] = await db.pool.query(
         "SELECT telegram_id FROM users WHERE department = 'M180101 แผนกประสานงานขาย' AND registration_complete = 1"
       );
@@ -657,36 +698,57 @@ async function createSplitOrder(req, res) {
         let successCount = 0;
         for (const user of coordUsers) {
           if (user.telegram_id) {
-            const result = await netsuite.sendTelegramMessage(user.telegram_id, message);
-            if (result) successCount++;
+            try {
+              const result = await netsuite.sendTelegramMessage(user.telegram_id, message);
+              if (result) successCount++;
+            } catch (telegramError) {
+              console.error('Telegram notification error:', telegramError);
+            }
           }
         }
-        if (successCount > 0) logs.push(`✅ Notified coordination department (${successCount} people)`);
+        if (successCount > 0) {
+          logs.push(`✅ Notified coordination department (${successCount} people)`);
+        }
       }
     } catch (err) {
       console.error('Error sending notifications:', err);
-      logs.push('❌ Error sending notifications');
+      logs.push('❌ Error sending notifications: ' + err.message);
     }
 
+    // Success response
     res.json({ 
       success: true, 
       newOrderId, 
+      newOrderNumber: newOrderId,
       logs,
       message: `Split order ${newOrderId} created successfully with ${validSplitItems.length} items`
     });
 
   } catch (error) {
     console.error('Error creating split order:', error);
-    console.error('Error response:', error.response?.data);
+    console.error('Error stack:', error.stack);
+    
+    let errorMessage = 'Failed to create split order';
+    let errorDetails = null;
+    
+    if (error.response) {
+      errorMessage = error.response.data?.message || 'NetSuite API error';
+      errorDetails = error.response.data;
+      console.error('NetSuite API Error Response:', error.response.data);
+    } else if (error.code === 'ECONNREFUSED') {
+      errorMessage = 'Unable to connect to NetSuite API';
+    } else {
+      errorMessage = error.message || errorMessage;
+    }
     
     res.status(500).json({ 
       success: false, 
-      message: error.response?.data?.message || error.message,
-      details: error.response?.data
+      message: errorMessage,
+      error: errorDetails,
+      logs: [`❌ Error: ${errorMessage}`]
     });
   }
 }
-
 module.exports = {
   getOrdersByStaff,
   getOrderDetails,

@@ -15,5 +15,6 @@ router.get('/filters/staff', orderController.getStaffList); // New
 router.get('/filters/status', orderController.getStatusList);
 router.get('/orders/all', orderController.getAllOrders);
 router.post('/order/split/create', orderController.createSplitOrder);
+router.post('/order/split/create', orderController.createSplitOrder);
 
 module.exports = router;

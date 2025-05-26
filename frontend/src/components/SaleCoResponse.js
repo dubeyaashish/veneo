@@ -1,4 +1,4 @@
-// frontend/src/components/SaleCoResponse.js - Updated to show all orders with filters
+// frontend/src/components/SaleCoResponse.js - Complete updated version with salesRep and department fields
 import React, { useState, useEffect } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
@@ -26,17 +26,13 @@ const formatDate = (dateString) => {
   if (!dateString) return '';
   
   try {
-    // Handle different date formats from database
     let date;
-    
     if (dateString.includes('T')) {
-      // Handle ISO format like "2025-05-14T00:00:00+" 
-      date = new Date(dateString.split('T')[0]); // Take only the date part
+      date = new Date(dateString.split('T')[0]);
     } else {
       date = new Date(dateString);
     }
     
-    // Check if date is valid
     if (isNaN(date.getTime())) {
       return 'Invalid Date';
     }
@@ -46,6 +42,15 @@ const formatDate = (dateString) => {
     console.error('Date formatting error:', error, 'for date:', dateString);
     return 'Invalid Date';
   }
+};
+
+// Helper function to format currency
+const formatCurrency = (amount) => {
+  if (!amount) return '0.00';
+  return parseFloat(amount).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
 };
 
 const SaleCoResponse = () => {
@@ -64,6 +69,7 @@ const SaleCoResponse = () => {
   const [showRemarkModal, setShowRemarkModal] = useState(false);
   const [showSplitModal, setShowSplitModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
+  const [showOrderModal, setShowOrderModal] = useState(false);
   const [remark, setRemark] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [searchText, setSearchText] = useState('');
@@ -77,6 +83,10 @@ const SaleCoResponse = () => {
     endDate: ''
   });
 
+  // View mode for order display
+  const [viewMode, setViewMode] = useState('summary'); // 'summary' or 'detailed'
+  const [itemsViewMode, setItemsViewMode] = useState('table'); // 'card' or 'table'
+
   const department = deptParam || currentUser?.department || '';
 
   // Fetch all orders with filters
@@ -85,7 +95,6 @@ const SaleCoResponse = () => {
       try {
         setLoading(true);
         
-        // Build query parameters for filters
         const params = new URLSearchParams();
         if (appliedFilters.staffCode) params.append('staffCode', appliedFilters.staffCode);
         if (appliedFilters.status) params.append('status', appliedFilters.status);
@@ -132,7 +141,7 @@ const SaleCoResponse = () => {
     };
 
     fetchOrders();
-  }, [id, appliedFilters]); // Re-fetch when filters change
+  }, [id, appliedFilters]);
 
   // Filter orders when search text changes
   useEffect(() => {
@@ -160,15 +169,9 @@ const SaleCoResponse = () => {
   const fetchOrderDetails = async (orderId) => {
     try {
       setLoadingDetails(true);
-      // Use the same API call as EditOrder.js
       const response = await axios.get(`${API_URL}/order/${orderId}`);
-      
-      // Store the raw response data (same structure as EditOrder.js)
       setOrderDetails(response.data);
-      
-      // Fetch split history
       fetchSplitHistory(orderId);
-      
     } catch (error) {
       console.error('Error fetching order details:', error);
       toast.error('Failed to load order details');
@@ -183,7 +186,6 @@ const SaleCoResponse = () => {
       if (response.data.success) {
         setSplitHistory(response.data.splits);
         
-        // Fetch details for related orders
         const relatedOrderIds = response.data.splits.map(split => 
           split.parent_order_id === parseInt(orderId) ? split.child_order_id : split.parent_order_id
         );
@@ -201,7 +203,6 @@ const SaleCoResponse = () => {
     try {
       const promises = orderIds.map(id => axios.get(`${API_URL}/order/${id}`));
       const responses = await Promise.all(promises);
-      
       const related = responses.map(response => response.data);
       setRelatedOrders(related);
     } catch (error) {
@@ -212,8 +213,6 @@ const SaleCoResponse = () => {
   const handleOrderSelect = (order) => {
     setSelectedOrder(order);
     fetchOrderDetails(order.netsuite_id);
-    
-    // Update URL without reloading the page
     navigate(`/response/${order.netsuite_id}${deptParam ? `?dept=${deptParam}` : ''}`, { replace: true });
   };
 
@@ -230,11 +229,9 @@ const SaleCoResponse = () => {
       });
       toast.success('อนุมัติคำสั่งซื้อเรียบร้อย');
       
-      // Remove the approved order from the list
       setOrderList(orderList.filter(order => order.netsuite_id !== selectedOrder.netsuite_id));
       setFilteredOrders(filteredOrders.filter(order => order.netsuite_id !== selectedOrder.netsuite_id));
       
-      // Select next order if available
       if (filteredOrders.length > 1) {
         const currentIndex = filteredOrders.findIndex(o => o.netsuite_id === selectedOrder.netsuite_id);
         const nextIndex = (currentIndex + 1) % filteredOrders.length;
@@ -263,15 +260,12 @@ const SaleCoResponse = () => {
       });
       toast.success('ส่งคำสั่งซื้อไปแก้ไขเรียบร้อย');
       
-      // Close modal and reset remark
       setShowRemarkModal(false);
       setRemark('');
       
-      // Remove the revised order from the list
       setOrderList(orderList.filter(order => order.netsuite_id !== selectedOrder.netsuite_id));
       setFilteredOrders(filteredOrders.filter(order => order.netsuite_id !== selectedOrder.netsuite_id));
       
-      // Select next order if available
       if (filteredOrders.length > 1) {
         const currentIndex = filteredOrders.findIndex(o => o.netsuite_id === selectedOrder.netsuite_id);
         const nextIndex = (currentIndex + 1) % filteredOrders.length;
@@ -288,9 +282,7 @@ const SaleCoResponse = () => {
   };
 
   const handleSplitComplete = (splitResult) => {
-    // Refresh the current order details to show updated quantities
     fetchOrderDetails(selectedOrder.netsuite_id);
-    
     toast.success(`Split order created: ${splitResult.newOrderNumber}`);
   };
 
@@ -300,6 +292,16 @@ const SaleCoResponse = () => {
 
   const handleSearchChange = (e) => {
     setSearchText(e.target.value);
+  };
+
+  // Calculate order totals
+  const calculateOrderTotal = (items) => {
+    if (!items || !Array.isArray(items)) return 0;
+    return items.reduce((total, item) => {
+      const quantity = parseFloat(item.quantity || 0);
+      const rate = parseFloat(item.rate || 0);
+      return total + (quantity * rate);
+    }, 0);
   };
 
   const hasActiveFilters = Object.values(appliedFilters).some(value => value && value.trim() !== '');
@@ -354,7 +356,7 @@ const SaleCoResponse = () => {
                 <input
                   type="text"
                   className="form-control"
-                  placeholder="ค้นหา Sales Order No, Customer Name, Sale Rep หรือ Tran ID"
+                  placeholder="ค้นหา Sales Order No, Customer, Sale Rep"
                   value={searchText}
                   onChange={handleSearchChange}
                 />
@@ -390,17 +392,23 @@ const SaleCoResponse = () => {
                             <div className="fw-bold">{safeRender(order.salesOrderNo)}</div>
                             <small className="text-muted">{safeRender(order.tranId)}</small>
                           </div>
-                          <div className="d-flex justify-content-between">
-                            <small className="text-truncate me-2" style={{ maxWidth: '60%' }}>
-                              {safeRender(order.customerName)}
+                          <div className="text-truncate mb-1" style={{ fontSize: '0.9rem' }}>
+                            <i className="bi bi-person me-1"></i>
+                            {safeRender(order.customerName)}
+                          </div>
+                          <div className="d-flex justify-content-between align-items-center">
+                            <small className="text-muted">
+                              <i className="bi bi-calendar3 me-1"></i>
+                              {formatDate(order.salesOrderDate)}
                             </small>
-                            <small className="text-muted text-end">
-                              {safeRender(order.saleRepName)}
+                            <small className="text-success fw-bold">
+                              ฿{formatCurrency(order.grandTotal)}
                             </small>
                           </div>
                           <div className="mt-1">
                             <small className="text-muted">
-                              {formatDate(order.salesOrderDate)}
+                              <i className="bi bi-person-badge me-1"></i>
+                              {safeRender(order.saleRepName)}
                             </small>
                           </div>
                         </div>
@@ -413,7 +421,7 @@ const SaleCoResponse = () => {
           </div>
         </div>
         
-        {/* Right pane - Order details (Same structure as EditOrder.js) */}
+        {/* Right pane - Order details */}
         <div className="col-md-8">
           {selectedOrder ? (
             loadingDetails ? (
@@ -427,24 +435,50 @@ const SaleCoResponse = () => {
               </div>
             ) : (
               <>
-                {/* Header Section */}
+                {/* Enhanced Header Section */}
                 <div className="row mb-4">
-                  <div className="col-md-8">
+                  <div className="col-md-6">
                     <h2 className="page-title">
-                      <i className="bi bi-file-earmark-text"></i> Sales Order #{safeRender(selectedOrder.tranId)}
+                      <i className="bi bi-file-earmark-text"></i> SO #{safeRender(selectedOrder.tranId)}
                     </h2>
+                    <p className="text-muted mb-0">
+                      Sales Order: {safeRender(selectedOrder.salesOrderNo)}
+                    </p>
                   </div>
-                  <div className="col-md-4 text-end">
-                    <span className="badge bg-info me-2">
-                      {venioSONumber ? venioSONumber : safeRender(selectedOrder.netsuite_id)}
-                    </span>
-                    <button
-                      className="btn btn-outline-primary btn-sm"
-                      onClick={() => setShowSplitModal(true)}
-                      title="Split this order"
-                    >
-                      <i className="bi bi-scissors"></i> Split
-                    </button>
+                  <div className="col-md-6 text-end">
+                    <div className="btn-group mb-2" role="group">
+                      <button
+                        className={`btn btn-sm ${viewMode === 'summary' ? 'btn-primary' : 'btn-outline-primary'}`}
+                        onClick={() => setViewMode('summary')}
+                      >
+                        <i className="bi bi-list"></i> Summary
+                      </button>
+                      <button
+                        className={`btn btn-sm ${viewMode === 'detailed' ? 'btn-primary' : 'btn-outline-primary'}`}
+                        onClick={() => setViewMode('detailed')}
+                      >
+                        <i className="bi bi-grid-3x3-gap"></i> Detailed
+                      </button>
+                    </div>
+                    <div className="d-block">
+                      <span className="badge bg-info me-2">
+                        {venioSONumber ? venioSONumber : safeRender(selectedOrder.netsuite_id)}
+                      </span>
+                      <button
+                        className="btn btn-outline-primary btn-sm me-2"
+                        onClick={() => setShowSplitModal(true)}
+                        title="Split this order"
+                      >
+                        <i className="bi bi-scissors"></i> Split
+                      </button>
+                      <button
+                        className="btn btn-outline-info btn-sm"
+                        onClick={() => setShowOrderModal(true)}
+                        title="View full order details"
+                      >
+                        <i className="bi bi-eye"></i> Full View
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -458,185 +492,353 @@ const SaleCoResponse = () => {
                   </div>
                 )}
 
-                {/* Order Main Info (Same as EditOrder.js) */}
-                <div className="row mb-4">
-                  <div className="col-md-12">
-                    <div className="card shadow-sm rounded-4">
-                      <div className="card-header bg-primary text-white">
-                        <i className="bi bi-info-circle"></i> ข้อมูลหลัก
-                      </div>
-                      <div className="card-body">
-                        <div className="row">
-                          <div className="col-md-6 mb-3">
-                            <label className="form-label">Memo:</label>
-                            <div className="input-group">
-                              <span className="input-group-text"><i className="bi bi-pencil"></i></span>
-                              <input
-                                type="text"
-                                className="form-control"
-                                value={so?.custbody_ar_all_memo || ''}
-                                readOnly
-                              />
-                            </div>
-                          </div>
-                          <div className="col-md-6 mb-3">
-                            <label className="form-label">PO #:</label>
-                            <div className="input-group">
-                              <span className="input-group-text"><i className="bi bi-hash"></i></span>
-                              <input
-                                type="text"
-                                className="form-control"
-                                value={so?.otherRefNum || ''}
-                                readOnly
-                              />
-                            </div>
-                          </div>
-                          <div className="col-md-6 mb-3">
-                            <label className="form-label">Tran Date:</label>
-                            <div className="input-group">
-                              <span className="input-group-text"><i className="bi bi-calendar-date"></i></span>
-                              <input
-                                type="date"
-                                className="form-control"
-                                value={so?.tranDate ? so.tranDate.substring(0, 10) : ''}
-                                readOnly
-                              />
-                            </div>
-                          </div>
-                          <div className="col-md-6 mb-3">
-                            <label className="form-label">Location:</label>
-                            <div className="input-group">
-                              <span className="input-group-text"><i className="bi bi-geo-alt"></i></span>
-                              <input
-                                type="text"
-                                className="form-control"
-                                value={locations?.[so?.location?.id] || ''}
-                                readOnly
-                              />
-                            </div>
-                          </div>
-                          <div className="col-md-6 mb-3">
-                            <label className="form-label">Req Inv MAC5:</label>
-                            <div className="input-group">
-                              <span className="input-group-text"><i className="bi bi-file-text"></i></span>
-                              <input
-                                type="text"
-                                className="form-control"
-                                value={so?.custbody_ar_req_inv_mac5 || ''}
-                                readOnly
-                              />
-                            </div>
-                          </div>
-                          <div className="col-md-6 mb-3">
-                            <label className="form-label">Customer:</label>
-                            <div className="input-group">
-                              <span className="input-group-text"><i className="bi bi-person"></i></span>
-                              <input
-                                type="text"
-                                className="form-control"
-                                value={customerName || ''}
-                                readOnly
-                              />
-                            </div>
-                          </div>
-                          <div className="col-md-6 mb-3">
-                            <label className="form-label">ที่อยู่จัดส่ง:</label>
-                            <div className="input-group">
-                              <span className="input-group-text"><i className="bi bi-geo"></i></span>
-                              <select className="form-control" value={so?.shipaddresslist || ''} disabled>
-                                <option value="">เลือกที่อยู่จัดส่ง</option>
-                                {shippingAddresses?.map((address) => (
-                                  <option key={address.address_internal_id} value={address.address_internal_id}>
-                                    {address.shipping_address}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          </div>
-                          <div className="col-md-6 mb-3">
-                            <label className="form-label">Remark: (Long Memo)</label>
-                            <div className="input-group">
-                              <span className="input-group-text"><i className="bi bi-chat-text"></i></span>
-                              <input
-                                type="text"
-                                className="form-control"
-                                value={so?.custbodyar_so_memo2 || ''}
-                                readOnly
-                              />
-                            </div>
-                          </div>
-                          <div className="col-md-6 mb-3">
-                            <label className="form-label">ผู้ติดต่อ:</label>
-                            <div className="input-group">
-                              <span className="input-group-text"><i className="bi bi-clipboard-data"></i></span>
-                              <input
-                                type="text"
-                                className="form-control"
-                                value={so?.custbody_ar_estimate_contrat1 || ''}
-                                readOnly
-                              />
-                            </div>
-                          </div>
+                {/* Summary View */}
+                {viewMode === 'summary' ? (
+                  <div className="row">
+                    {/* Order Summary Card */}
+                    <div className="col-md-6 mb-4">
+                      <div className="card h-100">
+                        <div className="card-header bg-primary text-white">
+                          <i className="bi bi-info-circle"></i> Order Summary
                         </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Items Section (Same as EditOrder.js) */}
-                <div className="row mb-4">
-                  <div className="col-md-12">
-                    <div className="card shadow-sm rounded-4">
-                      <div className="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-                        <div>
-                          <i className="bi bi-cart"></i> รายการสินค้า
-                        </div>
-                        <span className="badge bg-white text-primary ms-2">{orderDetails?.items?.length || 0} รายการ</span>
-                      </div>
-                      <div className="card-body">
-                        <div className="table-responsive mb-3">
-                          <table className="table table-hover align-middle table-bordered bg-white rounded-3">
-                            <thead className="table-light">
-                              <tr>
-                                <th>#</th>
-                                <th>Item</th>
-                                <th>Qty</th>
-                                <th>Rate</th>
-                                <th>Description</th>
-                                <th>Location</th>
-                                <th>Discount</th>
-                                <th>Units 11</th>
-                              </tr>
-                            </thead>
+                        <div className="card-body">
+                          <table className="table table-borderless table-sm">
                             <tbody>
-                              {orderDetails?.items?.length === 0 ? (
-                                <tr>
-                                  <td colSpan={8} className="text-center text-muted">ไม่มีรายการสินค้า</td>
-                                </tr>
-                              ) : (
-                                orderDetails?.items?.map((item, i) => {
-                                  const itemDisplay = orderDetails.itemMap?.[item.item?.id] || item.item?.id || `Item ${i + 1}`;
-                                  return (
-                                    <tr key={i}>
-                                      <td>{i + 1}</td>
-                                      <td>{itemDisplay}</td>
-                                      <td className="text-end">{item.quantity}</td>
-                                      <td className="text-end">{parseFloat(item.rate || 0).toFixed(2)}</td>
-                                      <td>{item.description}</td>
-                                      <td>{locations?.[item.inventorylocation?.id] || 'N/A'}</td>
-                                      <td className="text-end">{item.custcol_ice_ld_discount || 0}</td>
-                                      <td>{item.inpt_units_11 || ''}</td>
-                                    </tr>
-                                  );
-                                })
-                              )}
+                              <tr>
+                                <td><strong>Customer:</strong></td>
+                                <td>{customerName || 'N/A'}</td>
+                              </tr>
+                              <tr>
+                                <td><strong>Date:</strong></td>
+                                <td>{formatDate(selectedOrder.salesOrderDate)}</td>
+                              </tr>
+                              <tr>
+                                <td><strong>Sales Rep:</strong></td>
+                                <td>
+                                  {so?.salesRep?.refName || safeRender(selectedOrder.saleRepName)}
+                                  {so?.salesRep?.id && (
+                                    <small className="text-muted d-block">ID: {so.salesRep.id}</small>
+                                  )}
+                                </td>
+                              </tr>
+                              <tr>
+                                <td><strong>Department:</strong></td>
+                                <td>
+                                  {so?.department?.refName || 'N/A'}
+                                  {so?.department?.id && (
+                                    <small className="text-muted d-block">ID: {so.department.id}</small>
+                                  )}
+                                </td>
+                              </tr>
+                              <tr>
+                                <td><strong>PO #:</strong></td>
+                                <td>{so?.otherRefNum || 'N/A'}</td>
+                              </tr>
+                              <tr>
+                                <td><strong>Status:</strong></td>
+                                <td>
+                                  <span className="badge bg-info">{selectedOrder.status || 'N/A'}</span>
+                                </td>
+                              </tr>
+                              <tr>
+                                <td><strong>Total Amount:</strong></td>
+                                <td className="text-success fw-bold">
+                                  ฿{formatCurrency(selectedOrder.grandTotal)}
+                                </td>
+                              </tr>
                             </tbody>
                           </table>
                         </div>
                       </div>
                     </div>
+
+                    {/* Items Summary */}
+                    <div className="col-md-6 mb-4">
+                      <div className="card h-100">
+                        <div className="card-header bg-success text-white d-flex justify-content-between">
+                          <span><i className="bi bi-cart"></i> Items Summary</span>
+                          <span className="badge bg-white text-success">
+                            {orderDetails?.items?.length || 0} items
+                          </span>
+                        </div>
+                        <div className="card-body" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                          {orderDetails?.items?.length === 0 ? (
+                            <p className="text-muted text-center">No items found</p>
+                          ) : (
+                            <div className="list-group list-group-flush">
+                              {orderDetails?.items?.map((item, index) => (
+                                <div key={index} className="list-group-item px-0 py-2">
+                                  <div className="d-flex justify-content-between align-items-start">
+                                    <div className="flex-grow-1">
+                                      <h6 className="mb-1 text-truncate">
+                                        {orderDetails.itemMap?.[item.item?.id] || item.item?.id || `Item ${index + 1}`}
+                                      </h6>
+                                      <p className="mb-1 small text-muted">{item.description}</p>
+                                      <small className="text-muted">
+                                        Qty: {item.quantity} × ฿{formatCurrency(item.rate)}
+                                      </small>
+                                    </div>
+                                    <div className="text-end">
+                                      <span className="fw-bold text-success">
+                                        ฿{formatCurrency(parseFloat(item.quantity || 0) * parseFloat(item.rate || 0))}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Related Orders */}
+                    {relatedOrders.length > 0 && (
+                      <div className="col-md-12 mb-4">
+                        <div className="card">
+                          <div className="card-header bg-info text-white">
+                            <h6 className="mb-0">
+                              <i className="bi bi-diagram-3 me-2"></i>Related Split Orders
+                            </h6>
+                          </div>
+                          <div className="card-body">
+                            <div className="row">
+                              {relatedOrders.map((relatedOrder, index) => (
+                                <div key={index} className="col-md-6 mb-3">
+                                  <div className="card border-info">
+                                    <div className="card-header bg-light d-flex justify-content-between">
+                                      <strong>Split Order #{relatedOrder.so.id}</strong>
+                                      <span className="badge bg-info">
+                                        {relatedOrder.items?.length || 0} items
+                                      </span>
+                                    </div>
+                                    <div className="card-body p-3">
+                                      {relatedOrder.so.memo && (
+                                        <small className="text-muted d-block mb-2">{relatedOrder.so.memo}</small>
+                                      )}
+                                      <div className="text-end">
+                                        <span className="fw-bold text-success">
+                                          Total: ฿{formatCurrency(calculateOrderTotal(relatedOrder.items))}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
+                ) : (
+                  /* Detailed View */
+                  <>
+                    {/* Order Main Info */}
+                    <div className="row mb-4">
+                      <div className="col-md-12">
+                        <div className="card shadow-sm rounded-4">
+                          <div className="card-header bg-primary text-white">
+                            <i className="bi bi-info-circle"></i> ข้อมูลหลัก
+                          </div>
+                          <div className="card-body">
+                            <div className="row">
+                              <div className="col-md-6 mb-3">
+                                <label className="form-label">Memo:</label>
+                                <div className="input-group">
+                                  <span className="input-group-text"><i className="bi bi-pencil"></i></span>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={so?.custbody_ar_all_memo || ''}
+                                    readOnly
+                                  />
+                                </div>
+                              </div>
+                              <div className="col-md-6 mb-3">
+                                <label className="form-label">PO #:</label>
+                                <div className="input-group">
+                                  <span className="input-group-text"><i className="bi bi-hash"></i></span>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={so?.otherRefNum || ''}
+                                    readOnly
+                                  />
+                                </div>
+                              </div>
+                              <div className="col-md-6 mb-3">
+                                <label className="form-label">Tran Date:</label>
+                                <div className="input-group">
+                                  <span className="input-group-text"><i className="bi bi-calendar-date"></i></span>
+                                  <input
+                                    type="date"
+                                    className="form-control"
+                                    value={so?.tranDate ? so.tranDate.substring(0, 10) : ''}
+                                    readOnly
+                                  />
+                                </div>
+                              </div>
+                              <div className="col-md-6 mb-3">
+                                <label className="form-label">Location:</label>
+                                <div className="input-group">
+                                  <span className="input-group-text"><i className="bi bi-geo-alt"></i></span>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={locations?.[so?.location?.id] || ''}
+                                    readOnly
+                                  />
+                                </div>
+                              </div>
+                              <div className="col-md-6 mb-3">
+                                <label className="form-label">Req Inv MAC5:</label>
+                                <div className="input-group">
+                                  <span className="input-group-text"><i className="bi bi-file-text"></i></span>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={so?.custbody_ar_req_inv_mac5 || ''}
+                                    readOnly
+                                  />
+                                </div>
+                              </div>
+                              <div className="col-md-6 mb-3">
+                                <label className="form-label">Customer:</label>
+                                <div className="input-group">
+                                  <span className="input-group-text"><i className="bi bi-person"></i></span>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={customerName || ''}
+                                    readOnly
+                                  />
+                                </div>
+                              </div>
+                              <div className="col-md-6 mb-3">
+                                <label className="form-label">ที่อยู่จัดส่ง:</label>
+                                <div className="input-group">
+                                  <span className="input-group-text"><i className="bi bi-geo"></i></span>
+                                  <select className="form-control" value={so?.shipaddresslist || ''} disabled>
+                                    <option value="">เลือกที่อยู่จัดส่ง</option>
+                                    {shippingAddresses?.map((address) => (
+                                      <option key={address.address_internal_id} value={address.address_internal_id}>
+                                        {address.shipping_address}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </div>
+                              <div className="col-md-6 mb-3">
+                                <label className="form-label">Remark: (Long Memo)</label>
+                                <div className="input-group">
+                                  <span className="input-group-text"><i className="bi bi-chat-text"></i></span>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={so?.custbodyar_so_memo2 || ''}
+                                    readOnly
+                                  />
+                                </div>
+                              </div>
+                              <div className="col-md-6 mb-3">
+                                <label className="form-label">Sales Rep:</label>
+                                <div className="input-group">
+                                  <span className="input-group-text"><i className="bi bi-person-badge"></i></span>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={so?.salesRep?.refName || safeRender(selectedOrder?.saleRepName) || ''}
+                                    readOnly
+                                  />
+                                </div>
+                              </div>
+                              <div className="col-md-6 mb-3">
+                                <label className="form-label">Department:</label>
+                                <div className="input-group">
+                                  <span className="input-group-text"><i className="bi bi-building"></i></span>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={so?.department?.refName || 'N/A'}
+                                    readOnly
+                                  />
+                                </div>
+                              </div>
+                              <div className="col-md-6 mb-3">
+                                <label className="form-label">ผู้ติดต่อ:</label>
+                                <div className="input-group">
+                                  <span className="input-group-text"><i className="bi bi-clipboard-data"></i></span>
+                                  <input
+                                    type="text"
+                                    className="form-control"
+                                    value={so?.custbody_ar_estimate_contrat1 || ''}
+                                    readOnly
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Items Section */}
+                    <div className="row mb-4">
+                      <div className="col-md-12">
+                        <div className="card shadow-sm rounded-4">
+                          <div className="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                            <div>
+                              <i className="bi bi-cart"></i> รายการสินค้า
+                            </div>
+                            <span className="badge bg-white text-primary ms-2">{orderDetails?.items?.length || 0} รายการ</span>
+                          </div>
+                          <div className="card-body">
+                            <div className="table-responsive mb-3">
+                              <table className="table table-hover align-middle table-bordered bg-white rounded-3">
+                                <thead className="table-light">
+                                  <tr>
+                                    <th>#</th>
+                                    <th>Item</th>
+                                    <th>Qty</th>
+                                    <th>Rate</th>
+                                    <th>Description</th>
+                                    <th>Location</th>
+                                    <th>Discount</th>
+                                    <th>Units 11</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {orderDetails?.items?.length === 0 ? (
+                                    <tr>
+                                      <td colSpan={8} className="text-center text-muted">ไม่มีรายการสินค้า</td>
+                                    </tr>
+                                  ) : (
+                                    orderDetails?.items?.map((item, i) => {
+                                      const itemDisplay = orderDetails.itemMap?.[item.item?.id] || item.item?.id || `Item ${i + 1}`;
+                                      return (
+                                        <tr key={i}>
+                                          <td>{i + 1}</td>
+                                          <td>{itemDisplay}</td>
+                                          <td className="text-end">{item.quantity}</td>
+                                          <td className="text-end">{parseFloat(item.rate || 0).toFixed(2)}</td>
+                                          <td>{item.description}</td>
+                                          <td>{locations?.[item.inventorylocation?.id] || 'N/A'}</td>
+                                          <td className="text-end">{item.custcol_ice_ld_discount || 0}</td>
+                                          <td>{item.inpt_units_11 || ''}</td>
+                                        </tr>
+                                      );
+                                    })
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
 
                 {/* Action Buttons */}
                 <div className="d-flex justify-content-center gap-3 mt-4">
@@ -666,7 +868,7 @@ const SaleCoResponse = () => {
                 </div>
 
                 {/* Related/Split Orders */}
-                {relatedOrders.length > 0 && (
+                {relatedOrders.length > 0 && viewMode === 'detailed' && (
                   <div className="card mt-4">
                     <div className="card-header bg-info text-white">
                       <h6 className="mb-0">

@@ -1,4 +1,4 @@
-// frontend/src/components/OrderSplit.js - Using same endpoint as EditOrder.js
+// frontend/src/components/OrderSplit.js - Fixed version
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Alert } from 'react-bootstrap';
 import { toast } from 'react-toastify';
@@ -8,7 +8,7 @@ import { useParams } from 'react-router-dom';
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }) => {
-  const { id } = useParams(); // Get the order ID from URL params
+  const { id } = useParams();
   const [originalItems, setOriginalItems] = useState([]);
   const [splitItems, setSplitItems] = useState([]);
   const [creating, setCreating] = useState(false);
@@ -16,7 +16,7 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
 
   useEffect(() => {
     if (show && orderDetails?.items) {
-      // Initialize original items with current quantities - same structure as EditOrder.js
+      // Initialize original items with current quantities
       const items = orderDetails.items.map((item, index) => ({
         href: item.href,
         item_id: item.item?.id || '',
@@ -74,11 +74,9 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
     
     if (quantity <= 0 || quantity > availableQuantity) return;
 
-    // Check if item already exists in split items
     const existingSplitIndex = splitItems.findIndex(item => item.originalIndex === originalIndex);
     
     if (existingSplitIndex >= 0) {
-      // Update existing split item
       setSplitItems(prev => prev.map((item, idx) => {
         if (idx === existingSplitIndex) {
           return { ...item, quantity: item.quantity + quantity };
@@ -86,14 +84,12 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
         return item;
       }));
     } else {
-      // Add new split item - same structure as EditOrder.js items
       setSplitItems(prev => [...prev, {
         ...originalItem,
         quantity: quantity
       }]);
     }
 
-    // Reduce original item quantity
     setOriginalItems(prev => prev.map((item, idx) => {
       if (idx === originalIndex) {
         return { ...item, quantity: item.quantity - quantity };
@@ -108,7 +104,6 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
     
     if (quantity <= 0 || quantity > splitItem.quantity) return;
 
-    // Increase original item quantity
     setOriginalItems(prev => prev.map((item, idx) => {
       if (idx === splitItem.originalIndex) {
         return { ...item, quantity: item.quantity + quantity };
@@ -116,7 +111,6 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
       return item;
     }));
 
-    // Reduce or remove split item
     setSplitItems(prev => {
       const newSplitItems = [...prev];
       if (newSplitItems[splitIndex].quantity <= quantity) {
@@ -147,13 +141,11 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
     if (!draggedItem) return;
 
     if (draggedItem.isOriginal && !isDropZoneOriginal) {
-      // Transfer from original to split
       const originalIndex = originalItems.findIndex(item => 
         item.originalIndex === draggedItem.item.originalIndex
       );
       transferToSplit(originalIndex, 1);
     } else if (!draggedItem.isOriginal && isDropZoneOriginal) {
-      // Transfer from split to original
       const splitIndex = splitItems.findIndex(item => 
         item.originalIndex === draggedItem.item.originalIndex
       );
@@ -169,75 +161,75 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
       return;
     }
 
+    // Validate that split items have quantities > 0
+    const validSplitItems = splitItems.filter(item => item.quantity > 0);
+    if (validSplitItems.length === 0) {
+      toast.error('All split items have zero quantity');
+      return;
+    }
+
     try {
       setCreating(true);
       
-      // First, update the original order with reduced quantities - same as EditOrder.js
-      const originalUpdatePayload = {
-        // Copy all header fields from orderDetails.so
-        memo: orderDetails.so.memo || '',
-        otherrefnum: orderDetails.so.otherRefNum || '',
-        tranDate: orderDetails.so.tranDate ? orderDetails.so.tranDate.substring(0, 10) : '',
-        location_id: orderDetails.so.location?.id || '',
-        custbody_ar_req_inv_mac5: orderDetails.so.custbody_ar_req_inv_mac5 || '',
-        shipaddresslist: orderDetails.so.shipaddresslist || '',
-        custbodyar_so_memo2: orderDetails.so.custbodyar_so_memo2 || '',
-        custbody_ar_all_memo: orderDetails.so.custbody_ar_all_memo || '',
-        custbody_ar_so_statusbill: orderDetails.so.custbody_ar_so_statusbill || '',
-        custbody_ar_estimate_contrat1: orderDetails.so.custbody_ar_estimate_contrat1 || '',
-        items: originalItems, // Updated quantities
-        selectedDepartments: [],
-        updatedBy: currentUser?.telegram_id
+      console.log('Creating split order with the following data:');
+      console.log('Original Order ID:', id);
+      console.log('Split Items:', validSplitItems);
+      console.log('Remaining Original Items:', originalItems);
+
+      // Prepare the data for split order creation
+      const splitOrderPayload = {
+        originalOrderId: parseInt(id),
+        items: validSplitItems.map(item => ({
+          item_id: item.item_id,
+          quantity: item.quantity,
+          rate: item.rate,
+          description: item.description,
+          location: item.location,
+          custcol_ice_ld_discount: item.custcol_ice_ld_discount,
+          inpt_units_11: item.inpt_units_11
+        })),
+        updatedBy: currentUser?.telegram_id || null
       };
 
-      console.log('Updating original order with reduced quantities...');
-      const originalUpdateResponse = await axios.post(`${API_URL}/order/${id}/update`, originalUpdatePayload);
-      
-      if (originalUpdateResponse.data.success) {
-        console.log('Original order updated successfully');
-        
-        // Now create the split order - same structure but with split items
-        const splitOrderPayload = {
-          // Same header fields but with modified memo
-          memo: `${orderDetails.so.memo || ''} - Split Order`,
-          otherrefnum: `${orderDetails.so.otherRefNum || ''}-SPLIT`,
-          tranDate: orderDetails.so.tranDate ? orderDetails.so.tranDate.substring(0, 10) : '',
-          location_id: orderDetails.so.location?.id || '',
-          custbody_ar_req_inv_mac5: orderDetails.so.custbody_ar_req_inv_mac5 || '',
-          shipaddresslist: orderDetails.so.shipaddresslist || '',
-          custbodyar_so_memo2: `Split from SO ${id}`,
-          custbody_ar_all_memo: `${orderDetails.so.custbody_ar_all_memo || ''} - Split Order`,
-          custbody_ar_so_statusbill: orderDetails.so.custbody_ar_so_statusbill || '',
-          custbody_ar_estimate_contrat1: orderDetails.so.custbody_ar_estimate_contrat1 || '',
-          items: splitItems, // Only the split items
-          selectedDepartments: [],
-          updatedBy: currentUser?.telegram_id,
-          isNewOrder: true, // Flag to indicate this should create a new order
-          originalOrderId: id // Reference to the original order
-        };
+      console.log('Sending split order payload:', splitOrderPayload);
 
-        console.log('Creating split order...');
-        const splitOrderResponse = await axios.post(`${API_URL}/order/split/create`, splitOrderPayload);
+      // Call the backend to create split order
+      const response = await axios.post(`${API_URL}/order/split/create`, splitOrderPayload);
+      
+      if (response.data.success) {
+        console.log('Split order created successfully:', response.data);
+        toast.success(`Split order created successfully! New Order ID: ${response.data.newOrderId}`);
         
-        if (splitOrderResponse.data.success) {
-          toast.success(`Split order created successfully! New Order ID: ${splitOrderResponse.data.newOrderId}`);
-          onSplitComplete(splitOrderResponse.data);
-          onHide();
-        } else {
-          toast.error(splitOrderResponse.data.message || 'Failed to create split order');
-        }
+        // Call the completion handler
+        onSplitComplete({
+          newOrderId: response.data.newOrderId,
+          newOrderNumber: response.data.newOrderNumber || response.data.newOrderId,
+          logs: response.data.logs || []
+        });
+        
+        // Close the modal
+        onHide();
       } else {
-        toast.error('Failed to update original order');
+        console.error('Split order creation failed:', response.data);
+        toast.error(response.data.message || 'Failed to create split order');
       }
+      
     } catch (error) {
       console.error('Error creating split order:', error);
-      toast.error(error.response?.data?.message || 'Failed to create split order');
+      console.error('Error response:', error.response?.data);
+      
+      const errorMessage = error.response?.data?.message || 
+                          error.response?.data?.error || 
+                          error.message || 
+                          'Failed to create split order';
+      
+      toast.error(errorMessage);
     } finally {
       setCreating(false);
     }
   };
 
-  const canCreateSplit = splitItems.length > 0 && !creating;
+  const canCreateSplit = splitItems.length > 0 && splitItems.some(item => item.quantity > 0) && !creating;
 
   return (
     <Modal show={show} onHide={onHide} size="xl" backdrop="static">
@@ -248,6 +240,17 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
+        <Alert variant="info" className="mb-3">
+          <i className="bi bi-info-circle me-2"></i>
+          <strong>Split Order Process:</strong>
+          <ul className="mb-0 mt-2">
+            <li>New order will inherit ALL header information from original order</li>
+            <li>Original order quantities will be reduced by split amounts</li>
+            <li>Items with zero quantity will be removed from original order</li>
+            <li>Split relationship will be tracked in the system</li>
+          </ul>
+        </Alert>
+
         <div className="row">
           {/* Original Order Items */}
           <div className="col-md-6">
@@ -299,6 +302,12 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
                         >
                           <i className="bi bi-arrow-right"></i>
                         </button>
+                      </div>
+                      <div className="mt-2">
+                        <small className="text-muted">
+                          Rate: ฿{parseFloat(item.rate || 0).toFixed(2)} | 
+                          Total: ฿{(parseFloat(item.quantity || 0) * parseFloat(item.rate || 0)).toFixed(2)}
+                        </small>
                       </div>
                     </div>
                   </div>
@@ -364,6 +373,12 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
                             onChange={(e) => handleQuantityChange(index, e.target.value, false)}
                           />
                         </div>
+                        <div className="mt-2">
+                          <small className="text-muted">
+                            Rate: ฿{parseFloat(item.rate || 0).toFixed(2)} | 
+                            Total: ฿{(parseFloat(item.quantity || 0) * parseFloat(item.rate || 0)).toFixed(2)}
+                          </small>
+                        </div>
                       </div>
                     </div>
                   ))
@@ -374,9 +389,27 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
         </div>
 
         {splitItems.length > 0 && (
-          <Alert variant="info" className="mt-3">
-            <i className="bi bi-info-circle me-2"></i>
-            Split order will inherit all properties from the original order (customer, shipping address, etc.)
+          <Alert variant="success" className="mt-3">
+            <i className="bi bi-check-circle me-2"></i>
+            <strong>Split Summary:</strong>
+            <div className="mt-2">
+              <div className="row">
+                <div className="col-md-6">
+                  <strong>Items to Split:</strong> {splitItems.length}
+                  <br />
+                  <strong>Total Split Value:</strong> ฿{splitItems.reduce((total, item) => 
+                    total + (parseFloat(item.quantity || 0) * parseFloat(item.rate || 0)), 0
+                  ).toFixed(2)}
+                </div>
+                <div className="col-md-6">
+                  <strong>Remaining Items:</strong> {originalItems.filter(item => item.quantity > 0).length}
+                  <br />
+                  <strong>Remaining Value:</strong> ฿{originalItems.reduce((total, item) => 
+                    total + (parseFloat(item.quantity || 0) * parseFloat(item.rate || 0)), 0
+                  ).toFixed(2)}
+                </div>
+              </div>
+            </div>
           </Alert>
         )}
       </Modal.Body>
@@ -397,7 +430,7 @@ const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }
           ) : (
             <>
               <i className="bi bi-plus-circle me-2"></i>
-              Create Split Order
+              Create Split Order ({splitItems.filter(item => item.quantity > 0).length} items)
             </>
           )}
         </Button>
