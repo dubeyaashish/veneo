@@ -1,4 +1,4 @@
-// frontend/src/components/SaleCoResponse.js - Complete updated version with salesRep and department fields
+// frontend/src/components/SaleCoResponse.js - Complete updated version with PDF viewing
 import React, { useState, useEffect } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
@@ -8,7 +8,7 @@ import { Modal, Button, Form } from 'react-bootstrap';
 import OrderSplit from './OrderSplit';
 import OrderFilter from './OrderFilter';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+const API_URL = process.env.REACT_APP_API_URL || 'https://ppg24.tech/api';
 
 // Helper function to safely render any value
 const safeRender = (value) => {
@@ -294,6 +294,12 @@ const SaleCoResponse = () => {
     setSearchText(e.target.value);
   };
 
+  // PDF Viewing function
+  const handleViewPDF = (orderId) => {
+    const pdfUrl = `${API_URL}/order/${orderId}/pdf`;
+    window.open(pdfUrl, '_blank');
+  };
+
   // Calculate order totals
   const calculateOrderTotal = (items) => {
     if (!items || !Array.isArray(items)) return 0;
@@ -411,6 +417,15 @@ const SaleCoResponse = () => {
                               {safeRender(order.saleRepName)}
                             </small>
                           </div>
+                          {/* PDF Attachment Indicator */}
+                          {order.pdf_attachment && (
+                            <div className="mt-1">
+                              <small className="text-info">
+                                <i className="bi bi-paperclip me-1"></i>
+                                มีไฟล์แนบ
+                              </small>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </button>
@@ -592,6 +607,32 @@ const SaleCoResponse = () => {
                       </div>
                     </div>
 
+                    {/* PDF Attachment Card */}
+                    {selectedOrder?.pdf_attachment && (
+                      <div className="col-md-12 mb-4">
+                        <div className="card">
+                          <div className="card-header bg-info text-white d-flex justify-content-between">
+                            <span><i className="bi bi-paperclip"></i> ไฟล์แนบ PDF</span>
+                            <span className="badge bg-white text-info">
+                              <i className="bi bi-file-earmark-pdf"></i>
+                            </span>
+                          </div>
+                          <div className="card-body text-center">
+                            <i className="bi bi-file-earmark-pdf text-danger" style={{fontSize: '3rem'}}></i>
+                            <h5 className="mt-2">มีไฟล์ PDF แนบ</h5>
+                            <p className="text-muted">ไฟล์: {selectedOrder.pdf_attachment}</p>
+                            <button
+                              type="button"
+                              className="btn btn-primary"
+                              onClick={() => handleViewPDF(selectedOrder.netsuite_id)}
+                            >
+                              <i className="bi bi-eye me-2"></i>ดู PDF
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Related Orders */}
                     {relatedOrders.length > 0 && (
                       <div className="col-md-12 mb-4">
@@ -634,6 +675,35 @@ const SaleCoResponse = () => {
                 ) : (
                   /* Detailed View */
                   <>
+                    {/* PDF Attachment in Detailed View */}
+                    {orderDetails?.so?.pdf_attachment && (
+                      <div className="row mb-4">
+                        <div className="col-md-12">
+                          <div className="card shadow-sm rounded-4">
+                            <div className="card-header bg-info text-white">
+                              <i className="bi bi-paperclip"></i> ไฟล์แนบ PDF
+                            </div>
+                            <div className="card-body text-center">
+                              <div className="row justify-content-center">
+                                <div className="col-md-6">
+                                  <i className="bi bi-file-earmark-pdf text-danger" style={{fontSize: '4rem'}}></i>
+                                  <h4 className="mt-3">มีไฟล์ PDF แนบ</h4>
+                                  <p className="text-muted">คลิกเพื่อดูไฟล์แนบของ Sales Order นี้</p>
+                                  <button
+                                    type="button"
+                                    className="btn btn-primary btn-lg"
+                                    onClick={() => handleViewPDF(selectedOrder.netsuite_id)}
+                                  >
+                                    <i className="bi bi-eye me-2"></i>เปิดดู PDF
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Order Main Info */}
                     <div className="row mb-4">
                       <div className="col-md-12">

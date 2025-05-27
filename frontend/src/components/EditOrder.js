@@ -6,7 +6,7 @@ import RemarkModal from './RemarkModal';
 import LogsModal from './LogsModal';
 import { useAuth } from '../context/AuthContext';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+const API_URL = process.env.REACT_APP_API_URL || 'https://ppg24.tech/api';
 
 const EditOrder = () => {
   const { id } = useParams();
@@ -38,6 +38,11 @@ const EditOrder = () => {
   const [allCollapsed, setAllCollapsed] = useState(false);
   const [departments, setDepartments] = useState([]);
   const [selectedDepartments, setSelectedDepartments] = useState([]);
+
+  // PDF Upload states
+  const [uploading, setUploading] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [currentPDF, setCurrentPDF] = useState(null);
 
   useEffect(() => {
     const fetchOrder = async () => {
@@ -115,6 +120,13 @@ const EditOrder = () => {
     fetchDepartments();
   }, []);
 
+  // Check for existing PDF when order loads
+  useEffect(() => {
+    if (orderData && orderData.so && orderData.so.pdf_attachment) {
+      setCurrentPDF(orderData.so.pdf_attachment);
+    }
+  }, [orderData]);
+
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData({
@@ -157,45 +169,119 @@ const EditOrder = () => {
     setAllCollapsed(collapse);
   };
 
-// In EditOrder.js - update handleSubmit function
-
-const handleSubmit = async (e) => {
-  e.preventDefault();
-  console.log(formData);
-
-  try {
-    setProcessing(true);
-    const payload = { ...formData, selectedDepartments, updatedBy: currentUser?.telegram_id };
-    const response = await axios.post(`${API_URL}/order/${id}/update`, payload);
-
-    setLogs(response.data.logs);
-    
-    // Check if any notifications were sent
-    const notificationSent = response.data.logs.some(log => 
-      log.includes('ส่งการแจ้งเตือน')
-    );
-    
-    // Show more detailed toast based on what happened
-    if (response.data.headerUpdated || response.data.itemsUpdated.length > 0) {
-      if (notificationSent) {
-        toast.success('Sales Order updated successfully. Notifications sent to coordination team!', {
-          autoClose: 5000 // Show for longer
-        });
-      } else {
-        toast.success('Sales Order updated successfully!');
+  // PDF Upload functions
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      if (file.type !== 'application/pdf') {
+        toast.error('กรุณาเลือกไฟล์ PDF เท่านั้น');
+        return;
       }
-    } else {
-      toast.info('No changes were detected in the sales order.');
+      if (file.size > 10 * 1024 * 1024) { // 10MB
+        toast.error('ไฟล์ใหญ่เกิน 10MB');
+        return;
+      }
+      setSelectedFile(file);
     }
-    
-    setShowLogsModal(true);
-    setProcessing(false);
-  } catch (err) {
-    console.error('Error updating order:', err);
-    toast.error('Failed to update Sales Order: ' + (err.response?.data?.message || err.message));
-    setProcessing(false);
-  }
-};
+  };
+
+  const handleFileUpload = async () => {
+    if (!selectedFile) {
+      toast.error('กรุณาเลือกไฟล์');
+      return;
+    }
+
+    try {
+      setUploading(true);
+      const formData = new FormData();
+      formData.append('pdfFile', selectedFile);
+
+      const response = await axios.post(
+        `${API_URL}/order/${id}/upload`,
+        formData,
+        {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        }
+      );
+
+      if (response.data.success) {
+        toast.success('อัปโหลดไฟล์สำเร็จ');
+        setSelectedFile(null);
+        setCurrentPDF(response.data.file.filename);
+        document.getElementById('pdfFileInput').value = '';
+        if (document.getElementById('pdfFileInputReplace')) {
+          document.getElementById('pdfFileInputReplace').value = '';
+        }
+      }
+    } catch (error) {
+      console.error('Upload error:', error);
+      toast.error('เกิดข้อผิดพลาดในการอัปโหลด');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleViewPDF = () => {
+    const pdfUrl = `${API_URL}/order/${id}/pdf`;
+    window.open(pdfUrl, '_blank');
+  };
+
+  const handleDeletePDF = async () => {
+    if (!window.confirm('คุณแน่ใจหรือไม่ที่จะลบไฟล์ PDF นี้?')) {
+      return;
+    }
+
+    try {
+      const response = await axios.delete(`${API_URL}/order/${id}/pdf`);
+      if (response.data.success) {
+        toast.success('ลบไฟล์สำเร็จ');
+        setCurrentPDF(null);
+      }
+    } catch (error) {
+      console.error('Delete error:', error);
+      toast.error('เกิดข้อผิดพลาดในการลบไฟล์');
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    console.log(formData);
+
+    try {
+      setProcessing(true);
+      const payload = { ...formData, selectedDepartments, updatedBy: currentUser?.telegram_id };
+      const response = await axios.post(`${API_URL}/order/${id}/update`, payload);
+
+      setLogs(response.data.logs);
+      
+      // Check if any notifications were sent
+      const notificationSent = response.data.logs.some(log => 
+        log.includes('ส่งการแจ้งเตือน')
+      );
+      
+      // Show more detailed toast based on what happened
+      if (response.data.headerUpdated || response.data.itemsUpdated.length > 0) {
+        if (notificationSent) {
+          toast.success('Sales Order updated successfully. Notifications sent to coordination team!', {
+            autoClose: 5000 // Show for longer
+          });
+        } else {
+          toast.success('Sales Order updated successfully!');
+        }
+      } else {
+        toast.info('No changes were detected in the sales order.');
+      }
+      
+      setShowLogsModal(true);
+      setProcessing(false);
+    } catch (err) {
+      console.error('Error updating order:', err);
+      toast.error('Failed to update Sales Order: ' + (err.response?.data?.message || err.message));
+      setProcessing(false);
+    }
+  };
 
   const handleRemarkSave = (remarkText) => {
     setFormData({
@@ -419,6 +505,126 @@ const handleSubmit = async (e) => {
                   </div>
                   {/* ---- End Additional Header Fields ---- */}
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* PDF Upload Section */}
+        <div className="row mb-4">
+          <div className="col-md-12">
+            <div className="card shadow-sm rounded-4">
+              <div className="card-header bg-info text-white">
+                <i className="bi bi-paperclip"></i> แนบไฟล์ PDF
+              </div>
+              <div className="card-body">
+                {/* Show current PDF if exists */}
+                {currentPDF ? (
+                  <div className="alert alert-success d-flex justify-content-between align-items-center">
+                    <div>
+                      <i className="bi bi-file-earmark-pdf text-danger me-2"></i>
+                      <strong>มีไฟล์ PDF แนบอยู่แล้ว</strong>
+                      <small className="d-block text-muted">ไฟล์: {currentPDF}</small>
+                    </div>
+                    <div>
+                      <button
+                        type="button"
+                        className="btn btn-outline-primary btn-sm me-2"
+                        onClick={handleViewPDF}
+                      >
+                        <i className="bi bi-eye"></i> ดู
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-outline-danger btn-sm"
+                        onClick={handleDeletePDF}
+                      >
+                        <i className="bi bi-trash"></i> ลบ
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* Upload new PDF */
+                  <div className="row">
+                    <div className="col-md-8">
+                      <div className="input-group">
+                        <span className="input-group-text">
+                          <i className="bi bi-file-earmark-pdf"></i>
+                        </span>
+                        <input
+                          type="file"
+                          className="form-control"
+                          id="pdfFileInput"
+                          accept=".pdf"
+                          onChange={handleFileSelect}
+                          disabled={uploading}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-info"
+                          onClick={handleFileUpload}
+                          disabled={!selectedFile || uploading}
+                        >
+                          {uploading ? (
+                            <>
+                              <span className="spinner-border spinner-border-sm me-2"></span>
+                              กำลังอัปโหลด...
+                            </>
+                          ) : (
+                            <>
+                              <i className="bi bi-upload"></i> อัปโหลด
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      <small className="text-muted">
+                        รองรับไฟล์ PDF เท่านั้น (ขนาดไม่เกิน 10MB)
+                      </small>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Replace option when PDF exists */}
+                {currentPDF && (
+                  <div className="mt-3">
+                    <hr />
+                    <h6>อัปโหลดไฟล์ใหม่ (จะแทนที่ไฟล์เดิม):</h6>
+                    <div className="row">
+                      <div className="col-md-8">
+                        <div className="input-group">
+                          <span className="input-group-text">
+                            <i className="bi bi-file-earmark-pdf"></i>
+                          </span>
+                          <input
+                            type="file"
+                            className="form-control"
+                            id="pdfFileInputReplace"
+                            accept=".pdf"
+                            onChange={handleFileSelect}
+                            disabled={uploading}
+                          />
+                          <button
+                            type="button"
+                            className="btn btn-warning"
+                            onClick={handleFileUpload}
+                            disabled={!selectedFile || uploading}
+                          >
+                            {uploading ? (
+                              <>
+                                <span className="spinner-border spinner-border-sm me-2"></span>
+                                กำลังแทนที่...
+                              </>
+                            ) : (
+                              <>
+                                <i className="bi bi-arrow-repeat"></i> แทนที่
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

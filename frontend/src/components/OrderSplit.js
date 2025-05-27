@@ -5,7 +5,7 @@ import { toast } from 'react-toastify';
 import axios from 'axios';
 import { useParams } from 'react-router-dom';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+const API_URL = process.env.REACT_APP_API_URL || 'https://ppg24.tech/api';
 
 const OrderSplit = ({ show, onHide, orderDetails, onSplitComplete, currentUser }) => {
   const { id } = useParams();

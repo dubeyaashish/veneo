@@ -52,57 +52,136 @@ async function getOrderDetails(req, res) {
   }
 }
 
-// POST /api/order/:id/respond
 async function respondOrder(req, res) {
   try {
     const orderId = req.params.id;
     const { department, action, remark = '', respondedBy } = req.body;
 
+    console.log('📥 Order response received:', { orderId, department, action, remark, respondedBy });
+
     if (!department || !action) {
       return res.status(400).json({ success: false, message: 'Missing department or action' });
     }
 
+    // Record the response in the database
     await db.pool.query(
       'INSERT INTO order_responses (netsuite_id, department, action, remark, responded_by) VALUES (?, ?, ?, ?, ?)',
       [orderId, department, action, remark, respondedBy || null]
     );
 
-    const [wfRows] = await db.pool.query('SELECT updated_by, selected_departments FROM order_workflow WHERE netsuite_id = ? LIMIT 1', [orderId]);
-    const updatedBy = wfRows.length > 0 ? wfRows[0].updated_by : null;
     const soUrl = `https://ppg24.tech/order/${orderId}`;
 
-    if (action === 'revise' && updatedBy) {
-      await netsuite.sendTelegramMessage(
-        updatedBy,
-        `🔄 มีการขอแก้ไขจาก ${department} สำหรับ SO ${orderId}\nหมายเหตุ: ${remark}\n🔗 ${soUrl}`
-      );
-    }
-
-    if (wfRows.length > 0) {
-      const departments = (wfRows[0].selected_departments || '').split(',').map(d => d.trim()).filter(Boolean);
-      for (const dept of departments) {
-        const [users] = await db.pool.query(
-          'SELECT telegram_id FROM users WHERE department = ? AND registration_complete = 1',
-          [dept]
+    // Handle REVISE action - notify the sales rep
+    if (action === 'revise') {
+      console.log('🔄 Processing revise action for order:', orderId);
+      
+      try {
+        // Get the sales rep directly from the order
+        const [orderRows] = await db.pool.query(
+          'SELECT staffCode, salesOrderNo FROM sid_v_so WHERE netsuite_id = ? LIMIT 1',
+          [orderId]
         );
-        for (const user of users) {
-          if (user.telegram_id) {
-            await netsuite.sendTelegramMessage(
-              user.telegram_id,
-              `ℹ️ สถานะล่าสุดของ SO ${orderId}: ${department} ${action === 'approve' ? 'ผ่าน' : 'ส่งแก้ไข'}\n🔗 ${soUrl}`
+        
+        if (orderRows.length > 0 && orderRows[0].staffCode) {
+          const staffCode = orderRows[0].staffCode;
+          const salesOrderNo = orderRows[0].salesOrderNo;
+          
+          console.log(`📋 Found order: ${salesOrderNo}, Sales Rep: ${staffCode}`);
+          
+          // Get telegram_id from staff mapping
+          const [mappingRows] = await db.pool.query(
+            'SELECT telegram_id FROM staff_telegram_mapping WHERE staff_code = ? LIMIT 1',
+            [staffCode]
+          );
+          
+          if (mappingRows.length > 0 && mappingRows[0].telegram_id) {
+            const salesRepTelegramId = mappingRows[0].telegram_id;
+            
+            const message = `🔄 มีการขอแก้ไขจาก ${department}\n📋 SO: ${salesOrderNo} (${orderId})\n💬 หมายเหตุ: ${remark}\n🔗 ${soUrl}`;
+            
+            console.log(`📤 Sending revise notification to sales rep: ${salesRepTelegramId}`);
+            
+            await netsuite.sendTelegramMessage(salesRepTelegramId, message);
+            console.log('✅ Revise notification sent successfully to sales rep');
+            
+          } else {
+            console.log(`❌ No telegram mapping found for staffCode: ${staffCode}`);
+            
+            // Fallback: notify coordination department
+            const [coordUsers] = await db.pool.query(
+              "SELECT telegram_id FROM users WHERE department = 'M180101 แผนกประสานงานขาย' AND registration_complete = 1"
             );
+            
+            for (const user of coordUsers) {
+              if (user.telegram_id) {
+                try {
+                  await netsuite.sendTelegramMessage(
+                    user.telegram_id,
+                    `🔄 [FALLBACK] มีการขอแก้ไขจาก ${department}\n📋 SO: ${salesOrderNo} (${orderId})\n💬 หมายเหตุ: ${remark}\n🔗 ${soUrl}\n⚠️ ไม่พบข้อมูล Telegram ของ Sales Rep: ${staffCode}`
+                  );
+                  console.log(`📤 Fallback notification sent to coordination: ${user.telegram_id}`);
+                } catch (error) {
+                  console.error(`❌ Failed to send fallback notification: ${error.message}`);
+                }
+              }
+            }
           }
+        } else {
+          console.log(`❌ No staffCode found for order: ${orderId}`);
         }
+        
+      } catch (error) {
+        console.error('❌ Error processing revise notification:', error);
       }
     }
 
-    res.json({ success: true });
+    // Send status updates to selected departments (for both approve and revise)
+    try {
+      const [wfRows] = await db.pool.query(
+        'SELECT selected_departments FROM order_workflow WHERE netsuite_id = ? LIMIT 1', 
+        [orderId]
+      );
+      
+      if (wfRows.length > 0 && wfRows[0].selected_departments) {
+        const departments = wfRows[0].selected_departments.split(',').map(d => d.trim()).filter(Boolean);
+        
+        console.log(`📤 Sending status updates to departments: ${departments.join(', ')}`);
+        
+        for (const dept of departments) {
+          const [users] = await db.pool.query(
+            'SELECT telegram_id FROM users WHERE department = ? AND registration_complete = 1',
+            [dept]
+          );
+          
+          const statusMessage = action === 'approve' ? 'อนุมัติแล้ว ✅' : 'ส่งกลับแก้ไข 🔄';
+          const message = `📊 สถานะ SO ${orderId}: ${department} ${statusMessage}\n💬 หมายเหตุ: ${remark}\n🔗 ${soUrl}`;
+          
+          for (const user of users) {
+            if (user.telegram_id) {
+              try {
+                await netsuite.sendTelegramMessage(user.telegram_id, message);
+                console.log(`📤 Status update sent to ${dept}: ${user.telegram_id}`);
+              } catch (error) {
+                console.error(`❌ Failed to notify ${dept} user ${user.telegram_id}: ${error.message}`);
+              }
+            }
+          }
+        }
+      } else {
+        console.log('ℹ️ No selected departments found for status updates');
+      }
+    } catch (error) {
+      console.error('❌ Error sending status updates to departments:', error);
+    }
+
+    console.log('✅ Order response processed successfully');
+    res.json({ success: true, message: 'Response recorded successfully' });
+
   } catch (error) {
-    console.error('Error in respondOrder:', error);
-    res.status(500).json({ success: false, message: 'Server error' });
+    console.error('❌ Error in respondOrder:', error);
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 }
-
 // POST /api/order/:id/update
 async function updateOrder(req, res) {
   try {
